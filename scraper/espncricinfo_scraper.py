@@ -1,810 +1,680 @@
 # scraper/espncricinfo_scraper.py
-# ─────────────────────────────────────────────────────────
-# COMPLETE REWRITE — v4.0
-#
-# BUGS FIXED vs v3.0:
-#   1. ESPN event-ID ≠ ESPNcricinfo match-ID
-#      The old code did `str(eid) == str(match_id)` which is ALWAYS
-#      False because ESPN uses its own numbering. ESPN data was
-#      therefore NEVER used. Fixed: removed ID-equality gate.
-#
-#   2. KNOWN_MATCHES was checked LAST
-#      When HTML returns {} the hardcoded fallback ran but many IDs
-#      were simply missing from it. Fixed: KNOWN_MATCHES is now the
-#      FIRST thing consulted for static data (teams / venue).
-#
-#   3. scrape_match() returned {} for any ID not in hardcoded dict
-#      even when HTML also failed. Fixed: layered strategy — static
-#      base from schedule, live toss from ESPN/HTML on top.
-#
-# ARCHITECTURE (scrape_match):
-#   Layer 1 → KNOWN_MATCHES   : static teams / venue (always fast)
-#   Layer 2 → ESPN API         : live toss / match status overlay
-#   Layer 3 → HTML scraper     : toss fallback if ESPN blocked
-#   Layer 4 → pure HTML parse  : full fallback for unknown match IDs
-#
-# ARCHITECTURE (get_todays_match_id):
-#   1. Date match in KNOWN_MATCHES  (instant)
-#   2. ESPN scoreboard API          (team-name fuzzy match → known ID)
-#   3. ESPNcricinfo schedule HTML   (last resort)
-# ─────────────────────────────────────────────────────────
-
-import os
-import re
-import time
-import random
-from datetime import date, datetime
+# ESPNcricinfo JSON API scraper — fully defensive with debug output
+# If anything fails, run debug_api() first to see the raw response
 
 import requests
-from bs4 import BeautifulSoup
 import pandas as pd
+import numpy as np
+from datetime import date, datetime
+import json
+import time
 
+# ════════════════════════════════════════════════════════
+# ⚠️  STEP 1: UPDATE THIS BEFORE RUNNING
+# ════════════════════════════════════════════════════════
+# How to find series ID:
+#   1. Go to espncricinfo.com
+#   2. Click on IPL 2026 series
+#   3. Look at URL → /series/ipl-2026-XXXXXXX/
+#   4. That number XXXXXXX is your series ID
+IPL_SERIES_ID = "1551234"
+# ════════════════════════════════════════════════════════
 
-# ── Confirmed series ID ───────────────────────────────────
-IPL_SERIES_ID = os.getenv("IPL_SERIES_ID", "1510719")
-
-SESSION = requests.Session()
-
-_UA_LIST = [
-    (
+HEADERS = {
+    "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) "
-        "AppleWebKit/605.1.15 (KHTML, like Gecko) "
-        "Version/17.4.1 Safari/605.1.15"
-    ),
-    (
-        "Mozilla/5.0 (X11; Linux x86_64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-]
-
-# ─────────────────────────────────────────────────────────
-# KNOWN IPL 2026 MATCH SCHEDULE
-# ─────────────────────────────────────────────────────────
-# How to find a match ID:
-#   Go to ESPNcricinfo → open the match page → look at the URL:
-#   espncricinfo.com/series/ipl-2026-1510719/{slug}-{MATCH_ID}/live-cricket-score
-#   The 7-digit number at the end before /live-cricket-score is the match ID.
-#
-# Add each match before it starts. The scraper uses this dict as the
-# primary source for teams and venue — APIs only add live toss/status.
-# ─────────────────────────────────────────────────────────
-KNOWN_MATCHES = {
-    # match_id (int) : static match info
-    # "date" must be "YYYY-MM-DD" (IST match date)
-    1529286: {
-        "team1": "Rajasthan Royals",
-        "team2": "Delhi Capitals",
-        "venue": "Sawai Mansingh Stadium, Jaipur",
-        "date": "2026-05-01",
-    },
-    # ── Add upcoming matches below ──
-    # 1529290: {
-    #     "team1": "Mumbai Indians",
-    #     "team2": "Chennai Super Kings",
-    #     "venue": "Wankhede Stadium, Mumbai",
-    #     "date": "2026-05-03",
-    # },
-    # 1529295: {
-    #     "team1": "Kolkata Knight Riders",
-    #     "team2": "Sunrisers Hyderabad",
-    #     "venue": "Eden Gardens, Kolkata",
-    #     "date": "2026-05-04",
-    # },
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.espncricinfo.com/",
 }
 
-# ─────────────────────────────────────────────────────────
-# TEAM NAME NORMALISATION
-# Converts any short form / city name → canonical full name
-# ─────────────────────────────────────────────────────────
-_TEAM_ALIASES = {
-    "rajasthan":  "Rajasthan Royals",    "rr":   "Rajasthan Royals",
-    "delhi":      "Delhi Capitals",      "dc":   "Delhi Capitals",
-    "mumbai":     "Mumbai Indians",      "mi":   "Mumbai Indians",
-    "kolkata":    "Kolkata Knight Riders","kkr":  "Kolkata Knight Riders",
-    "chennai":    "Chennai Super Kings", "csk":  "Chennai Super Kings",
-    "hyderabad":  "Sunrisers Hyderabad", "srh":  "Sunrisers Hyderabad",
-    "bangalore":  "Royal Challengers Bengaluru",
-    "bengaluru":  "Royal Challengers Bengaluru",
-    "rcb":        "Royal Challengers Bengaluru",
-    "punjab":     "Punjab Kings",        "pbks": "Punjab Kings",
-    "lucknow":    "Lucknow Super Giants","lsg":  "Lucknow Super Giants",
-    "gujarat":    "Gujarat Titans",      "gt":   "Gujarat Titans",
-}
 
-_TEAM_KW = (
-    r"Indians|Royals|Kings|Capitals|Knights|Titans|Giants|Sunrisers|"
-    r"Challengers|Lucknow|Punjab|Gujarat|Mumbai|Delhi|Rajasthan|"
-    r"Kolkata|Chennai|Hyderabad|Bangalore|Bengaluru|Supergiants"
-)
+# ════════════════════════════════════════════════════════
+# DEBUG FUNCTION — Run this first if anything fails
+# ════════════════════════════════════════════════════════
+
+def debug_api():
+    """
+    Run this function FIRST if you get any errors.
+    It shows you exactly what the API returns so you can fix the scraper.
+
+    Usage in notebook:
+        import sys
+        sys.path.append('../scraper')
+        from espncricinfo_scraper import debug_api
+        debug_api()
+    """
+    print("=" * 60)
+    print("DEBUG: Checking ESPNcricinfo API")
+    print("=" * 60)
+
+    # Step 1: Test network
+    print("\n[1] Testing network connection...")
+    try:
+        r = requests.get("https://www.espncricinfo.com", headers=HEADERS, timeout=10)
+        print(f"    ✅ Connected. Status: {r.status_code}")
+    except Exception as e:
+        print(f"    ❌ No network: {e}")
+        print("    → Check your internet connection")
+        return
+
+    # Step 2: Test schedule API
+    print(f"\n[2] Testing schedule API with series ID: {IPL_SERIES_ID}")
+    url = (
+        f"https://hs-consumer-api.espncricinfo.com/v1/pages/series/schedule"
+        f"?lang=en&seriesId={IPL_SERIES_ID}"
+    )
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        print(f"    Status: {r.status_code}")
+        if r.status_code == 200:
+            data = r.json()
+            print(f"    ✅ API works. Top-level keys: {list(data.keys())}")
+
+            # Show today's date
+            today_str = date.today().strftime("%Y-%m-%d")
+            print(f"\n    Today's date: {today_str}")
+
+            # Try to navigate the structure
+            content = data.get("content", data)  # some APIs wrap in 'content'
+            schedule_map = content.get("matchScheduleMap", [])
+            print(f"    matchScheduleMap length: {len(schedule_map)}")
+
+            # Show first few dates in schedule
+            print("\n    Dates in schedule:")
+            count = 0
+            for block in schedule_map:
+                wrappers = block.get("scheduleAdWrapper", [block])
+                for w in wrappers:
+                    d = w.get("date", "no-date")
+                    print(f"      {d}")
+                    count += 1
+                    if count >= 10:
+                        break
+                if count >= 10:
+                    print("      ... (more dates)")
+                    break
+
+        elif r.status_code == 404:
+            print(f"    ❌ 404 — Wrong series ID: {IPL_SERIES_ID}")
+            print("    → Update IPL_SERIES_ID in espncricinfo_scraper.py")
+        else:
+            print(f"    ❌ Unexpected status: {r.status_code}")
+            print(f"    Response: {r.text[:300]}")
+
+    except json.JSONDecodeError:
+        print("    ❌ Response is not JSON")
+        print(f"    Raw: {r.text[:300]}")
+    except Exception as e:
+        print(f"    ❌ Error: {e}")
+
+    print("\n" + "=" * 60)
+    print("Copy this output and share it to diagnose errors")
+    print("=" * 60)
 
 
-def _normalise_team(raw: str) -> str:
-    """Map a raw team string (from API / HTML) to canonical full name."""
-    if not raw:
-        return raw
-    raw_l = raw.lower().strip()
-    for alias, canonical in _TEAM_ALIASES.items():
-        if alias in raw_l:
-            return canonical
-    return raw  # return as-is if no match
-
-
-# ─────────────────────────────────────────────────────────
-# LOW-LEVEL FETCH HELPERS
-# ─────────────────────────────────────────────────────────
-
-def _json_headers():
-    return {
-        "User-Agent": random.choice(_UA_LIST),
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Origin": "https://www.espncricinfo.com",
-        "Referer": "https://www.espncricinfo.com/",
-    }
-
-
-def _html_headers():
-    return {
-        "User-Agent": random.choice(_UA_LIST),
-        "Accept": (
-            "text/html,application/xhtml+xml,application/xml;"
-            "q=0.9,image/avif,image/webp,*/*;q=0.8"
-        ),
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-    }
-
+# ════════════════════════════════════════════════════════
+# HELPER: Safe JSON request
+# ════════════════════════════════════════════════════════
 
 def _get_json(url, retries=2):
-    for attempt in range(retries):
+    """
+    Makes GET request and returns JSON. Returns None on any failure.
+    Retries up to `retries` times on failure.
+    """
+    for attempt in range(retries + 1):
         try:
-            res = SESSION.get(url, headers=_json_headers(), timeout=12)
-            if res.status_code == 200:
-                return res.json()
-            if res.status_code in (401, 403, 404):
-                print(f"[scraper] Hard block {res.status_code}: {url}")
+            response = requests.get(url, headers=HEADERS, timeout=15)
+
+            if response.status_code == 200:
+                return response.json()
+
+            if response.status_code == 404:
+                print(f"404 Not Found: {url}")
+                print("If this is the schedule URL, update IPL_SERIES_ID")
                 return None
-            print(f"[scraper] HTTP {res.status_code}, attempt {attempt + 1}: {url}")
-            time.sleep(1.5 * (attempt + 1))
+
+            print(f"HTTP {response.status_code} for URL: {url}")
+            return None
+
+        except requests.exceptions.ConnectionError:
+            print("❌ No internet connection. Check your network.")
+            return None
         except requests.exceptions.Timeout:
-            print(f"[scraper] Timeout attempt {attempt + 1}: {url}")
-            time.sleep(2)
-        except Exception as exc:
-            print(f"[scraper] Request error: {exc}")
-            time.sleep(2)
-    return None
-
-
-def _get_html(url, retries=2):
-    for attempt in range(retries):
-        try:
-            res = SESSION.get(url, headers=_html_headers(), timeout=15)
-            if res.status_code == 200:
-                return res.text
-            if res.status_code in (401, 403):
-                print(f"[scraper] HTML hard block {res.status_code}: {url}")
-                return None
-            print(f"[scraper] HTML HTTP {res.status_code}, attempt {attempt + 1}")
-            time.sleep(1.5 * (attempt + 1))
-        except Exception as exc:
-            print(f"[scraper] HTML error: {exc}")
-            time.sleep(2)
-    return None
-
-
-def _get_html_selenium(url):
-    try:
-        import importlib
-        webdriver = importlib.import_module("selenium.webdriver").webdriver
-        Options  = importlib.import_module("selenium.webdriver.chrome.options").Options
-        opts = Options()
-        opts.add_argument("--headless")
-        opts.add_argument("--no-sandbox")
-        opts.add_argument("--disable-dev-shm-usage")
-        opts.add_argument(f"--user-agent={random.choice(_UA_LIST)}")
-        driver = webdriver.Chrome(options=opts)
-        driver.get(url)
-        time.sleep(3)
-        html = driver.page_source
-        driver.quit()
-        return html
-    except ModuleNotFoundError:
-        print("[scraper] Selenium not installed")
-        return None
-    except Exception as exc:
-        print(f"[scraper] Selenium error: {exc}")
-        return None
-
-
-# ─────────────────────────────────────────────────────────
-# SOURCE 1 — ESPN Public Scoreboard API
-# ─────────────────────────────────────────────────────────
-# NOTE: ESPN uses its OWN event-ID numbering, completely different
-# from ESPNcricinfo match IDs. We NEVER compare them. We use ESPN
-# only to get toss / status info and optionally to fuzzy-match teams.
-
-_ESPN_SCOREBOARD = (
-    "https://site.api.espn.com/apis/site/v2/sports/cricket/ipl/scoreboard"
-)
-
-
-def _espn_best_event():
-    """
-    Fetch ESPN scoreboard → return (event_id_str, event_dict) for the
-    current / most recent IPL match.  Returns (None, None) on failure.
-
-    *** Does NOT try to compare event_id with ESPNcricinfo match_id ***
-    """
-    data = _get_json(_ESPN_SCOREBOARD)
-    if not data:
-        return None, None
-
-    events = data.get("events", [])
-    if not events:
-        print("[scraper] ESPN API: no events in response")
-        return None, None
-
-    priority = {"in": 0, "pre": 1, "post": 2}
-    events_sorted = sorted(
-        events,
-        key=lambda e: priority.get(
-            e.get("status", {}).get("type", {}).get("state", "post"), 3
-        ),
-    )
-    best = events_sorted[0]
-    eid  = best.get("id", "")
-    state = best.get("status", {}).get("type", {}).get("state", "?")
-    print(f"[scraper] ESPN best event: id={eid}, state={state}")
-    return str(eid), best
-
-
-def _espn_extract_toss(event, team1="", team2=""):
-    """
-    Extract toss / status data from an ESPN event dict.
-    Returns a partial dict (only the keys that were found).
-    Teams are passed in so we can normalise ESPN's names to ours.
-    """
-    if not event:
-        return {}
-
-    result = {}
-
-    # Match status
-    state = event.get("status", {}).get("type", {}).get("state", "")
-    if state == "in":
-        result["match_status"] = "live"
-    elif state == "post":
-        result["match_status"] = "completed"
-    else:
-        result["match_status"] = "upcoming"
-
-    competitions = event.get("competitions", [event])
-    comp = competitions[0] if competitions else {}
-    competitors = comp.get("competitors", [])
-
-    # ESPN team names (may differ from our canonical names)
-    espn_t1 = competitors[0].get("team", {}).get("displayName", "") if len(competitors) > 0 else ""
-    espn_t2 = competitors[1].get("team", {}).get("displayName", "") if len(competitors) > 1 else ""
-
-    for note in comp.get("notes", []):
-        text = note.get("text", "")
-        m = re.search(
-            r"(.+?)\s+won the toss and elected to\s+(bat|bowl|field)",
-            text,
-            re.IGNORECASE,
-        )
-        if m:
-            raw_winner = m.group(1).strip()
-            decision   = "bat" if m.group(2).lower() == "bat" else "field"
-
-            # Map raw_winner → canonical name using team1/team2 we already know
-            toss_winner = ""
-            for canonical in [team1, team2]:
-                if canonical and any(
-                    kw.lower() in raw_winner.lower()
-                    for kw in canonical.split()
-                    if len(kw) > 3
-                ):
-                    toss_winner = canonical
-                    break
-            if not toss_winner:
-                toss_winner = _normalise_team(raw_winner) or raw_winner
-
-            if decision == "bat":
-                chasing = team2 if toss_winner == team1 else team1
-            else:
-                chasing = toss_winner
-
-            result.update(
-                {
-                    "toss_winner":  toss_winner,
-                    "toss_decision": decision,
-                    "toss_done":    True,
-                    "chasing_team": chasing,
-                }
-            )
-            print(f"[scraper] ESPN toss → {toss_winner} elected to {decision}")
-            break
-
-    return result
-
-
-# ─────────────────────────────────────────────────────────
-# SOURCE 2 — ESPNcricinfo Live Score Page HTML
-# ─────────────────────────────────────────────────────────
-
-def _scrape_toss_html(match_id, team1, team2):
-    """
-    Hit the ESPNcricinfo live-score page and extract toss info.
-    Returns a partial dict (toss fields only) or {}.
-    """
-    url = (
-        f"https://www.espncricinfo.com/series/ipl-2026-{IPL_SERIES_ID}"
-        f"/{match_id}/live-cricket-score"
-    )
-    html = _get_html(url)
-    if not html:
-        print(f"[scraper] Live page blocked, trying Selenium for {match_id}…")
-        html = _get_html_selenium(url)
-    if not html:
-        return {}
-
-    soup = BeautifulSoup(html, "html.parser")
-    page_text = soup.get_text(" ", strip=True)
-
-    toss_patterns = [
-        rf"({_TEAM_KW}(?:\s+\w+)?)\s+won the toss\s+(?:and\s+)?(?:elected|chose)\s+to\s+(bat|bowl|field)",
-        rf"Toss[:\s]+({_TEAM_KW}(?:\s+\w+)?)[^,]*,\s*(bat|bowl|field)",
-        rf"({_TEAM_KW}(?:\s+\w+)?)[,\s]+(?:bat|bowl|field) first",
-    ]
-
-    for pattern in toss_patterns:
-        m = re.search(pattern, page_text, re.IGNORECASE)
-        if not m:
-            continue
-
-        raw_winner  = m.group(1).strip()
-        decision_raw = m.group(2).lower() if m.lastindex >= 2 else ""
-
-        # Map to canonical team names
-        toss_winner = ""
-        for canonical in [team1, team2]:
-            if canonical and any(
-                kw.lower() in raw_winner.lower()
-                for kw in canonical.split()
-                if len(kw) > 3
-            ):
-                toss_winner = canonical
-                break
-        if not toss_winner:
-            toss_winner = _normalise_team(raw_winner) or raw_winner
-
-        decision = "bat" if "bat" in decision_raw else "field"
-        chasing  = (team2 if toss_winner == team1 else team1) if decision == "bat" else toss_winner
-
-        status = "upcoming"
-        if any(kw in page_text.lower() for kw in ("live", "batting", "in progress", "wickets")):
-            status = "live"
-
-        result = {
-            "toss_winner":  toss_winner,
-            "toss_decision": decision,
-            "toss_done":    True,
-            "chasing_team": chasing,
-            "match_status": status,
-        }
-        print(f"[scraper] HTML toss → {toss_winner} elected to {decision}")
-        return result
-
-    print(f"[scraper] HTML: no toss info found on page for match {match_id}")
-    return {}
-
-
-# ─────────────────────────────────────────────────────────
-# SOURCE 3 — ESPNcricinfo Schedule Page  (for match-ID discovery)
-# ─────────────────────────────────────────────────────────
-
-def _schedule_url():
-    return (
-        f"https://www.espncricinfo.com/series/ipl-2026-{IPL_SERIES_ID}"
-        "/match-schedule-fixtures-and-results"
-    )
-
-
-def _html_find_match_id():
-    """
-    Scrape ESPNcricinfo schedule page → nearest upcoming match ID.
-    Returns int or None.
-    """
-    url  = _schedule_url()
-    html = _get_html(url)
-    if not html:
-        print("[scraper] Schedule HTML blocked, trying Selenium…")
-        html = _get_html_selenium(url)
-    if not html:
-        return None
-
-    _month_map = {
-        "jan": 1, "january": 1, "feb": 2, "february": 2,
-        "mar": 3, "march": 3,  "apr": 4, "april": 4,
-        "may": 5,
-        "jun": 6, "june": 6,  "jul": 7, "july": 7,
-        "aug": 8, "august": 8,"sep": 9, "sept": 9, "september": 9,
-        "oct": 10,"october": 10,"nov": 11,"november": 11,
-        "dec": 12,"december": 12,
-    }
-
-    def _parse_date(text):
-        for pat in [
-            r"\b(?P<month>Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(?P<day>\d{1,2})(?:,?\s*(?P<year>\d{4}))?",
-            r"\b(?P<day>\d{1,2})\s+(?P<month>Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)(?:,?\s*(?P<year>\d{4}))?",
-        ]:
-            m = re.search(pat, text, re.IGNORECASE)
-            if not m:
+            if attempt < retries:
+                print(f"Timeout. Retrying ({attempt + 1}/{retries})...")
+                time.sleep(2)
                 continue
-            month = _month_map.get(m.group("month").lower()[:3])
-            if not month:
-                continue
-            day  = int(m.group("day"))
-            year = int(m.group("year")) if m.group("year") else date.today().year
-            try:
-                return date(year, month, day)
-            except ValueError:
-                continue
-        return None
-
-    soup = BeautifulSoup(html, "html.parser")
-    now  = datetime.now()
-    seen, candidates, found_ids = set(), [], []
-
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        m = re.search(r"[/-](\d{7,})(?:/|$)", href)
-        if not m:
-            continue
-        mid = int(m.group(1))
-        if mid in seen:
-            continue
-        seen.add(mid)
-        found_ids.append(mid)
-
-        match_dt = None
-        container = a
-        for _ in range(5):
-            txt = container.get_text(" ", strip=True)
-            d = _parse_date(txt)
-            if d:
-                match_dt = datetime(d.year, d.month, d.day, 12, 0)
-                break
-            container = container.parent
-            if container is None:
-                break
-
-        if match_dt:
-            candidates.append((match_dt, mid))
-
-    if candidates:
-        future  = [c for c in candidates if c[0] >= now]
-        chosen  = min(future or candidates, key=lambda c: c[0])
-        print(f"[scraper] Schedule found {len(candidates)} dated IDs, using {chosen[1]} @ {chosen[0].date()}")
-        return chosen[1]
-
-    if found_ids:
-        print(f"[scraper] Schedule found {len(found_ids)} IDs (no dates), using {found_ids[0]}")
-        return found_ids[0]
+            print("❌ Request timed out after retries.")
+            return None
+        except json.JSONDecodeError:
+            print("❌ Response is not valid JSON.")
+            return None
+        except Exception as e:
+            print(f"❌ Unexpected error: {type(e).__name__}: {e}")
+            return None
 
     return None
 
 
-# ─────────────────────────────────────────────────────────
-# SOURCE 4 — Full HTML parse fallback (unknown match IDs)
-# ─────────────────────────────────────────────────────────
-
-def _html_full_match_info(match_id):
-    """
-    Last-resort: parse teams + toss entirely from ESPNcricinfo HTML.
-    Used only when match_id is NOT in KNOWN_MATCHES.
-    """
-    url = (
-        f"https://www.espncricinfo.com/series/ipl-2026-{IPL_SERIES_ID}"
-        f"/{match_id}/live-cricket-score"
-    )
-    html = _get_html(url)
-    if not html:
-        html = _get_html_selenium(url)
-    if not html:
-        return {}
-
-    soup      = BeautifulSoup(html, "html.parser")
-    page_text = soup.get_text(" ", strip=True)
-
-    result = {
-        "team1": "", "team2": "", "venue": "",
-        "match_status": "upcoming",
-        "toss_winner": "", "toss_decision": "",
-        "toss_done": False, "chasing_team": "",
-        "match_id": str(match_id),
-    }
-
-    # ── Teams ──────────────────────────────────────────────
-    m = re.search(
-        rf"({_TEAM_KW}(?:\s+\w+)?)\s+(?:vs|v)\s+({_TEAM_KW}(?:\s+\w+)?)",
-        page_text, re.IGNORECASE,
-    )
-    if m:
-        result["team1"] = _normalise_team(m.group(1).strip())
-        result["team2"] = _normalise_team(m.group(2).strip())
-    else:
-        # keyword scan
-        found = []
-        for kw, canonical in _TEAM_ALIASES.items():
-            if kw in page_text.lower() and canonical not in found:
-                found.append(canonical)
-            if len(found) == 2:
-                break
-        if len(found) >= 2:
-            result["team1"], result["team2"] = found[0], found[1]
-
-    # ── Venue ──────────────────────────────────────────────
-    for kw in [
-        "Wankhede", "Eden Gardens", "Chinnaswamy", "M Chinnaswamy",
-        "Kotla", "Brabourne", "Chepauk", "Ekana", "HPCA",
-        "Narendra Modi", "Sawai Mansingh", "Arun Jaitley",
-    ]:
-        if kw.lower() in page_text.lower():
-            result["venue"] = kw
-            break
-
-    # ── Toss ───────────────────────────────────────────────
-    for pat in [
-        rf"({_TEAM_KW}(?:\s+\w+)?)\s+won the toss\s+(?:and\s+)?(?:elected|chose)\s+to\s+(bat|bowl|field)",
-        rf"Toss[:\s]+({_TEAM_KW}(?:\s+\w+)?)[^,]*,\s*(bat|bowl|field)",
-    ]:
-        m2 = re.search(pat, page_text, re.IGNORECASE)
-        if m2:
-            tw  = _normalise_team(m2.group(1).strip())
-            dec = "bat" if "bat" in m2.group(2).lower() else "field"
-            t1, t2 = result["team1"], result["team2"]
-            chasing = (t2 if tw == t1 else t1) if dec == "bat" else tw
-            result.update({"toss_winner": tw, "toss_decision": dec,
-                           "toss_done": True, "chasing_team": chasing})
-            break
-
-    if any(k in page_text.lower() for k in ("live", "batting", "in progress")):
-        result["match_status"] = "live"
-
-    return result
-
-
-# ─────────────────────────────────────────────────────────
-# PUBLIC API
-# ─────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════
+# FUNCTION 1: Find today's match ID
+# ════════════════════════════════════════════════════════
 
 def get_todays_match_id():
     """
-    Returns int match_id for today's / nearest IPL match, or None.
+    Finds today's IPL match ID from ESPNcricinfo schedule API.
 
-    Priority:
-    1. Date lookup in KNOWN_MATCHES  (instant, no network)
-    2. ESPN API event → fuzzy-match teams → resolve to known ID
-    3. ESPNcricinfo schedule HTML
+    Returns:
+        int  → matchId if match found today
+        None → no match today, or API/network error
+
+    If this returns None unexpectedly, run debug_api() to diagnose.
     """
-    today = date.today().isoformat()
+    url = (
+        f"https://hs-consumer-api.espncricinfo.com/v1/pages/series/schedule"
+        f"?lang=en&seriesId={IPL_SERIES_ID}"
+    )
 
-    # ── 1. KNOWN_MATCHES date lookup ──
-    for mid, info in sorted(KNOWN_MATCHES.items()):
-        if info.get("date") == today:
-            print(f"[scraper] Today's match from schedule: {mid} "
-                  f"({info['team1']} vs {info['team2']})")
-            return mid
+    print(f"Fetching schedule for series ID: {IPL_SERIES_ID}")
+    data = _get_json(url)
 
-    # ── 2. ESPN API ───────────────────
-    _, event = _espn_best_event()
-    if event:
-        state = event.get("status", {}).get("type", {}).get("state", "")
-        if state in ("in", "pre"):
-            comps = event.get("competitions", [event])
-            comp  = comps[0] if comps else {}
-            competitors = comp.get("competitors", [])
-            espn_names = {
-                c.get("team", {}).get("displayName", "").lower()
-                for c in competitors
-            }
-            # Try to resolve to a known ESPNcricinfo match ID by team names
-            for mid, info in KNOWN_MATCHES.items():
-                for canonical in [info["team1"], info["team2"]]:
-                    if any(
-                        kw.lower() in n
-                        for n in espn_names
-                        for kw in canonical.split()
-                        if len(kw) > 3
-                    ):
-                        print(f"[scraper] ESPN event matched to known match {mid}")
-                        return mid
+    if data is None:
+        print("❌ Schedule API failed. Run debug_api() to diagnose.")
+        return None
 
-    # ── 3. Schedule HTML ─────────────
-    mid = _html_find_match_id()
-    if mid:
-        return mid
+    today_str = date.today().strftime("%Y-%m-%d")
+    print(f"Looking for match on: {today_str}")
 
-    print("[scraper] Could not auto-detect today's match.")
-    return None
+    try:
+        # Handle both response formats:
+        # Format A: data["content"]["matchScheduleMap"]
+        # Format B: data["matchScheduleMap"]
+        content = data.get("content", data)
+        schedule_map = content.get("matchScheduleMap", [])
 
+        if not schedule_map:
+            print("❌ matchScheduleMap is empty.")
+            print("   The series ID may be wrong, or schedule not loaded yet.")
+            return None
+
+        for block in schedule_map:
+            # Each block can have a "scheduleAdWrapper" list
+            # Some blocks have a direct date field
+            wrappers = block.get("scheduleAdWrapper", [])
+
+            # Also check if the block itself is a wrapper (some API versions)
+            if not wrappers and "date" in block:
+                wrappers = [block]
+
+            for wrapper in wrappers:
+                wrapper_date = wrapper.get("date", "")
+
+                if wrapper_date != today_str:
+                    continue
+
+                # Found today's date!
+                match_list = wrapper.get("matchScheduleList", [])
+
+                for schedule in match_list:
+                    matches = schedule.get("matches", [])
+
+                    for m in matches:
+                        info = m.get("matchInfo", {})
+                        match_id = info.get("matchId")
+
+                        if match_id:
+                            t1 = info.get("team1", {}).get("teamName", "Team 1")
+                            t2 = info.get("team2", {}).get("teamName", "Team 2")
+                            print(f"✅ Found match: {t1} vs {t2} (ID: {match_id})")
+                            return int(match_id)
+
+        print(f"No IPL match scheduled for today ({today_str})")
+        return None
+
+    except (KeyError, TypeError, AttributeError) as e:
+        print(f"❌ Error parsing schedule: {e}")
+        print("   Run debug_api() to see the raw API structure.")
+        return None
+
+
+# ════════════════════════════════════════════════════════
+# FUNCTION 2: Scrape match details
+# ════════════════════════════════════════════════════════
 
 def scrape_match(match_id):
     """
-    Returns a full match_info dict for match_id.
+    Fetches full match details from ESPNcricinfo match API.
 
-    Layered strategy:
-      Layer 1 — KNOWN_MATCHES       : teams + venue  (always tried first)
-      Layer 2 — ESPN API toss        : overlay live toss/status
-      Layer 3 — HTML toss scrape     : fallback if ESPN missing/blocked
-      Layer 4 — full HTML parse      : used only if match not in KNOWN_MATCHES
+    Args:
+        match_id (int): from get_todays_match_id()
+
+    Returns:
+        dict with keys:
+            team1 (str)         — always
+            team2 (str)         — always
+            venue (str)         — always
+            toss_done (bool)    — True after toss
+            toss_winner (str)   — if toss_done
+            toss_decision (str) — 'bat' or 'field', if toss_done
+            chasing_team (str)  — if toss_done
+            team1_xi (list)     — if toss_done and XI announced
+            team2_xi (list)     — if toss_done and XI announced
     """
-    # ── Layer 1: Static base from schedule ────────────────
-    if match_id in KNOWN_MATCHES:
-        base = dict(KNOWN_MATCHES[match_id])          # deep copy
-        base.update({
-            "match_id":     str(match_id),
-            "toss_winner":  "",
-            "toss_decision": "",
-            "toss_done":    False,
-            "chasing_team": "",
-            "match_status": "upcoming",
-        })
-        print(f"[scraper] Layer 1 (KNOWN_MATCHES): "
-              f"{base['team1']} vs {base['team2']} @ {base['venue']}")
-    else:
-        print(f"[scraper] match_id {match_id} not in KNOWN_MATCHES — using HTML fallback")
-        base = _html_full_match_info(match_id)
-        if base.get("team1"):
-            return base
-        print("[scraper] All sources exhausted — no match data")
+    url = (
+        f"https://hs-consumer-api.espncricinfo.com/v1/pages/match/info"
+        f"?lang=en&seriesId={IPL_SERIES_ID}&matchId={match_id}"
+    )
+
+    print(f"Fetching match info for matchId: {match_id}")
+    data = _get_json(url)
+
+    if data is None:
+        print("❌ Match API failed.")
         return {}
 
-    # ── Layer 2: ESPN API for live toss/status ────────────
-    _, event = _espn_best_event()
-    if event:
-        toss_data = _espn_extract_toss(event, base["team1"], base["team2"])
-        if toss_data:
-            base.update(toss_data)
-            print(f"[scraper] Layer 2 (ESPN): toss_done={base.get('toss_done')}, "
-                  f"winner={base.get('toss_winner')}, decision={base.get('toss_decision')}")
+    result = {"toss_done": False}
 
-    # ── Layer 3: HTML toss scrape (if still no toss) ──────
-    if not base.get("toss_done"):
-        print("[scraper] Layer 3 (HTML toss scrape)…")
-        html_toss = _scrape_toss_html(match_id, base["team1"], base["team2"])
-        if html_toss:
-            base.update(html_toss)
-
-    return base
-
-
-# ─────────────────────────────────────────────────────────
-# FEATURE VECTOR  (unchanged from v3.0)
-# ─────────────────────────────────────────────────────────
-
-def _safe_label_transform(encoder, value, default=0):
     try:
-        return int(encoder.transform([value])[0])
-    except Exception:
-        return default
+        # ── Team names ──
+        # Try both response formats
+        match_data = data.get("match", data)
+        info = match_data.get("matchInfo", match_data)
+
+        team1_data = info.get("team1", {})
+        team2_data = info.get("team2", {})
+
+        result["team1"]    = team1_data.get("teamName", "")
+        result["team2"]    = team2_data.get("teamName", "")
+        result["team1_id"] = str(team1_data.get("teamId", ""))
+        result["team2_id"] = str(team2_data.get("teamId", ""))
+
+        if not result["team1"] or not result["team2"]:
+            print("❌ Could not extract team names.")
+            print(f"   info keys: {list(info.keys())}")
+            return result
+
+        print(f"   Teams: {result['team1']} vs {result['team2']}")
+
+        # ── Venue ──
+        venue_data = info.get("venue", {})
+        ground = venue_data.get("ground", "")
+        city   = venue_data.get("city", "")
+        if ground and city:
+            result["venue"] = f"{ground}, {city}"
+        elif ground:
+            result["venue"] = ground
+        else:
+            result["venue"] = ""
+
+        print(f"   Venue: {result['venue']}")
+
+        # ── Toss ──
+        toss = info.get("tossResults", {})
+
+        if toss and toss.get("winnerTeamId"):
+            result["toss_done"]  = True
+            winner_id            = str(toss.get("winnerTeamId", ""))
+            decision_raw         = toss.get("decision", "").lower()
+
+            if winner_id == result["team1_id"]:
+                result["toss_winner"] = result["team1"]
+                result["toss_loser"]  = result["team2"]
+            else:
+                result["toss_winner"] = result["team2"]
+                result["toss_loser"]  = result["team1"]
+
+            if "bat" in decision_raw:
+                result["toss_decision"] = "bat"
+                result["chasing_team"]  = result["toss_loser"]
+            else:
+                result["toss_decision"] = "field"
+                result["chasing_team"]  = result["toss_winner"]
+
+            print(f"   Toss: {result['toss_winner']} won → elected to {result['toss_decision']}")
+            print(f"   Chasing: {result['chasing_team']}")
+        else:
+            print("   Toss not done yet (pre-toss mode)")
+
+        # ── Playing XI ──
+        if result["toss_done"]:
+            result["team1_xi"] = []
+            result["team2_xi"] = []
+
+            # Try "matchPlayers" key first
+            match_players = data.get("matchPlayers", {})
+            team_players  = match_players.get("teamPlayers", [])
+
+            for team_entry in team_players:
+                team_name = team_entry.get("team", {}).get("teamName", "")
+                players   = team_entry.get("players", [])
+
+                xi = []
+                for p in players:
+                    player_obj = p.get("player", {})
+                    is_playing = p.get("isPlaying", False)
+                    # Some API versions use "isInPlayingXI" or "playingXi"
+                    if not is_playing:
+                        is_playing = p.get("isInPlayingXI", False)
+
+                    if is_playing:
+                        name = (
+                            player_obj.get("fullName", "")
+                            or player_obj.get("name", "")
+                        )
+                        if name:
+                            xi.append(name)
+
+                if team_name == result["team1"]:
+                    result["team1_xi"] = xi[:11]
+                elif team_name == result["team2"]:
+                    result["team2_xi"] = xi[:11]
+
+            # Fallback: try "playingXi" directly
+            if not result["team1_xi"] and not result["team2_xi"]:
+                for team_entry in team_players:
+                    team_name  = team_entry.get("team", {}).get("teamName", "")
+                    playing_xi = team_entry.get("playingXi", [])
+                    xi = [
+                        p.get("fullName", "") or p.get("name", "")
+                        for p in playing_xi
+                        if p.get("fullName") or p.get("name")
+                    ]
+                    if team_name == result["team1"]:
+                        result["team1_xi"] = xi[:11]
+                    elif team_name == result["team2"]:
+                        result["team2_xi"] = xi[:11]
+
+            t1_count = len(result["team1_xi"])
+            t2_count = len(result["team2_xi"])
+            print(f"   Playing XI: {result['team1']}({t1_count}) | {result['team2']}({t2_count})")
+
+            if t1_count == 0 or t2_count == 0:
+                print("   ℹ️  XI not yet announced (toss done but no XI yet)")
+
+    except Exception as e:
+        print(f"❌ Error parsing match data: {type(e).__name__}: {e}")
+
+    return result
 
 
-def build_feature_vector(
-    match_info, player_lookup, matches,
-    team_encoder, venue_encoder, venue_score_history,
-    team_pp_eco_lookup, team_oppener_lookup,
-    get_team_recent_avg_score, get_season_avg_score,
-    get_season_year, get_venue_recent_avg_score,
-    get_team_recent_high_score_rate, feature_cols,
-):
-    team1       = match_info.get("team1", "")
-    team2       = match_info.get("team2", "")
-    venue       = match_info.get("venue", "")
-    toss_winner = match_info.get("toss_winner", "")
-    toss_dec    = match_info.get("toss_decision", "").lower()
-    today       = pd.Timestamp(date.today())
+# ════════════════════════════════════════════════════════
+# FUNCTION 3: Build feature vector
+# ════════════════════════════════════════════════════════
 
-    def _tm(t):
-        return matches[(matches["team1"] == t) | (matches["team2"] == t)].sort_values("match_date")
+def build_feature_vector(match_info,
+                          player_lookup,
+                          matches_df,
+                          team_encoder,
+                          venue_encoder,
+                          venue_score_history,
+                          team_pp_eco_lookup,
+                          team_oppener_lookup,
+                          get_team_recent_avg_score,
+                          get_season_avg_score,
+                          get_season_year,
+                          get_venue_recent_avg_score,
+                          get_team_recent_high_score_rate,
+                          feature_cols):
+    """
+    Converts match info dict into model-ready feature vector.
 
-    def _wr(t):
-        tm = _tm(t)
-        return float((tm["winner"] == t).sum()) / len(tm) if len(tm) else 0.5
+    Returns:
+        list → [[f1, f2, ...]] ready for model.predict()
+    """
 
-    def _l5(t):
-        tm = _tm(t).tail(5)
-        return float((tm["winner"] == t).sum()) if len(tm) else 3.0
+    team1 = match_info.get("team1", "")
+    team2 = match_info.get("team2", "")
+    venue = match_info.get("venue", "")
+    today = pd.Timestamp(datetime.today().date())
 
-    def _chase(t):
-        tm = _tm(t)
-        if not len(tm):
-            return 0.5
-        cw = tm[
-            (tm["winner"] == t)
-            & (tm.get("win_by_wickets", pd.Series(0, index=tm.index)) > 0)
-        ]
-        return float(len(cw)) / len(tm)
+    # ── Encode teams and venue ──
+    known_teams  = set(team_encoder.classes_)
+    known_venues = set(venue_encoder.classes_)
 
-    def _h2h(a, b):
-        h = matches[
-            ((matches["team1"] == a) & (matches["team2"] == b))
-            | ((matches["team1"] == b) & (matches["team2"] == a))
-        ]
-        return int((h["winner"] == a).sum())
+    def safe_encode_team(name):
+        if name in known_teams:
+            return int(team_encoder.transform([name])[0])
+        # Try partial match (handles name variations like RCB vs Royal Challengers)
+        for kt in known_teams:
+            if name.lower() in kt.lower() or kt.lower() in name.lower():
+                return int(team_encoder.transform([kt])[0])
+        print(f"⚠️  Unknown team: '{name}' — using 0")
+        return 0
 
-    row = {
-        "team1":                   _safe_label_transform(team_encoder, team1),
-        "team2":                   _safe_label_transform(team_encoder, team2),
-        "venue":                   _safe_label_transform(venue_encoder, venue),
-        "venue_avg_first_innings": get_venue_recent_avg_score(venue, today),
-        "venue_recent_avg":        get_venue_recent_avg_score(venue, today),
-        "is_home_team1":           0,
-        "toss_winner_is_team1":    1 if toss_winner == team1 else 0,
-        "toss_decision_bat":       1 if "bat" in toss_dec else 0,
-        "h2h_team1_wins":          float(_h2h(team1, team2)),
-        "h2h_team2_wins":          float(_h2h(team2, team1)),
-        "chase_win_pct_team1":     _chase(team1),
-        "chase_win_pct_team2":     _chase(team2),
-        "high_score_chase_t1":     _chase(team1),
-        "high_score_chase_t2":     _chase(team2),
-        "winrate_team1":           _wr(team1),
-        "winrate_team2":           _wr(team2),
-        "last5_win_team1":         _l5(team1),
-        "last5_win_team2":         _l5(team2),
-        "t1_recent_avg_score":     get_team_recent_avg_score(team1, today),
-        "t2_recent_avg_score":     get_team_recent_avg_score(team2, today),
-        "t1_high_score_rate":      get_team_recent_high_score_rate(team1, today),
-        "t2_high_score_rate":      get_team_recent_high_score_rate(team2, today),
-        "t1_pp_bowling_economy":   float(team_pp_eco_lookup.get(team1, 7.5)),
-        "t2_pp_bowling_economy":   float(team_pp_eco_lookup.get(team2, 7.5)),
-        "season_avg_score":        get_season_avg_score(today),
-        "season_year":             get_season_year(today),
-        "t1_avg_batting_avg":      0.0, "t1_avg_strike_rate":    0.0,
-        "t1_top3_batting_avg":     0.0, "t1_avg_economy":        0.0,
-        "t1_avg_bowling_avg":      0.0, "t1_recent_strike_rate": 0.0,
-        "t1_recent_economy":       0.0, "t2_avg_batting_avg":    0.0,
-        "t2_avg_strike_rate":      0.0, "t2_top3_batting_avg":   0.0,
-        "t2_avg_economy":          0.0, "t2_avg_bowling_avg":    0.0,
-        "t2_recent_strike_rate":   0.0, "t2_recent_economy":     0.0,
-        "t1_opener_batting_avg":   float(team_oppener_lookup.get(team1, {}).get("opener_avg_batting_avg", 0.0)),
-        "t1_opener_strike_rate":   float(team_oppener_lookup.get(team1, {}).get("opener_avg_strike_rate", 0.0)),
-        "t2_opener_batting_avg":   float(team_oppener_lookup.get(team2, {}).get("opener_avg_batting_avg", 0.0)),
-        "t2_opener_strike_rate":   float(team_oppener_lookup.get(team2, {}).get("opener_avg_strike_rate", 0.0)),
-        "t1_bat_vs_bowl":          0.0, "t2_bat_vs_bowl":        0.0,
-        "t1_rolling_season_avg":   get_season_avg_score(today),
-        "t2_rolling_season_avg":   get_season_avg_score(today),
+    def safe_encode_venue(v):
+        if v in known_venues:
+            return int(venue_encoder.transform([v])[0])
+        # Try partial match
+        for kv in known_venues:
+            if kv.lower() in v.lower() or v.split(",")[0].strip().lower() in kv.lower():
+                return int(venue_encoder.transform([kv])[0])
+        print(f"⚠️  Unknown venue: '{v}' — using 0")
+        return 0
+
+    t1_enc = safe_encode_team(team1)
+    t2_enc = safe_encode_team(team2)
+    v_enc  = safe_encode_venue(venue)
+
+    # ── Venue features ──
+    venue_base   = venue.split(",")[0].strip()  # "Wankhede Stadium"
+    past_venue   = venue_score_history[
+        (venue_score_history["venue"].str.contains(venue_base, case=False, na=False)) &
+        (venue_score_history["match_date"] < today)
+    ]
+    avg_inn = float(past_venue["first_innings_score"].mean()) if not past_venue.empty else 167.0
+    rec_avg = get_venue_recent_avg_score(venue, today)
+
+    # ── Home ground ──
+    HOME = {
+        "Wankhede"          : "Mumbai Indians",
+        "Chidambaram"       : "Chennai Super Kings",
+        "Eden Gardens"      : "Kolkata Knight Riders",
+        "Chinnaswamy"       : "Royal Challengers Bengaluru",
+        "Arun Jaitley"      : "Delhi Capitals",
+        "Sawai Mansingh"    : "Rajasthan Royals",
+        "Rajiv Gandhi"      : "Sunrisers Hyderabad",
+        "Punjab"            : "Punjab Kings",
+        "Narendra Modi"     : "Gujarat Titans",
+        "Ekana"             : "Lucknow Super Giants",
+    }
+    home_team = ""
+    for keyword, team in HOME.items():
+        if keyword.lower() in venue.lower():
+            home_team = team
+            break
+    is_home = 1 if home_team == team1 else 0
+
+    # ── Toss ──
+    toss_t1  = 1 if match_info.get("toss_winner") == team1 else 0
+    toss_bat = 1 if match_info.get("toss_decision") == "bat" else 0
+
+    # ── H2H ──
+    h2h_df = matches_df[
+        ((matches_df["team1"] == team1) & (matches_df["team2"] == team2)) |
+        ((matches_df["team1"] == team2) & (matches_df["team2"] == team1))
+    ]
+    h1 = len(h2h_df[h2h_df["winner"] == team1])
+    h2 = len(h2h_df[h2h_df["winner"] == team2])
+
+    # ── Chase stats ──
+    def cpct(t):
+        c = matches_df[matches_df["team2"] == t]
+        return len(c[c["winner"] == t]) / len(c) if len(c) > 0 else 0.5
+
+    def hcpct(t):
+        c = matches_df[matches_df["team2"] == t]
+        return len(c[c["winner"] == t]) / len(c) if len(c) > 0 else 0.4
+
+    def wr(t, n=10):
+        m = matches_df[(matches_df["team1"] == t) | (matches_df["team2"] == t)].tail(n)
+        return len(m[m["winner"] == t]) / len(m) if len(m) > 0 else 0.5
+
+    def l5(t):
+        m = matches_df[(matches_df["team1"] == t) | (matches_df["team2"] == t)].tail(5)
+        return int(len(m[m["winner"] == t]))
+
+    c1, c2   = cpct(team1),  cpct(team2)
+    hc1, hc2 = hcpct(team1), hcpct(team2)
+    wr1, wr2 = wr(team1),    wr(team2)
+    l1, l2   = l5(team1),    l5(team2)
+
+    # ── Recent scores ──
+    rs1    = get_team_recent_avg_score(team1, today, n=5)
+    rs2    = get_team_recent_avg_score(team2, today, n=5)
+    rs1_15 = get_team_recent_avg_score(team1, today, n=15)
+    rs2_15 = get_team_recent_avg_score(team2, today, n=15)
+    hsr1   = get_team_recent_high_score_rate(team1, today)
+    hsr2   = get_team_recent_high_score_rate(team2, today)
+    pp1    = float(team_pp_eco_lookup.get(team1, 8.5))
+    pp2    = float(team_pp_eco_lookup.get(team2, 8.5))
+    s_avg  = get_season_avg_score(today)
+    s_yr   = get_season_year(today)
+
+    # ── Player stats from XI ──
+    def neutral():
+        return {
+            "avg_batting_avg": 25.0,   "avg_strike_rate": 120.0,
+            "top3_batting_avg": 30.0,  "avg_economy": 8.5,
+            "avg_bowling_avg": 30.0,   "recent_strike_rate": 120.0,
+            "recent_economy": 8.5,
+        }
+
+    def xi_stats(xi):
+        if not xi:
+            return neutral()
+        s = player_lookup[player_lookup["player"].isin(xi)]
+        if s.empty:
+            return neutral()
+        def safe_mean(col):
+            v = s[col].replace(0, np.nan)
+            return float(v.mean()) if v.notna().any() else 0.0
+        return {
+            "avg_batting_avg"   : float(s["batting_avg"].mean()),
+            "avg_strike_rate"   : float(s["strike_rate"].mean()),
+            "top3_batting_avg"  : float(s.nlargest(3, "batting_avg")["batting_avg"].mean()),
+            "avg_economy"       : safe_mean("economy"),
+            "avg_bowling_avg"   : safe_mean("bowling_avg"),
+            "recent_strike_rate": float(s["recent_strike_rate"].mean()),
+            "recent_economy"    : safe_mean("recent_economy"),
+        }
+
+    toss_done = match_info.get("toss_done", False)
+    t1_xi = match_info.get("team1_xi", []) if toss_done else []
+    t2_xi = match_info.get("team2_xi", []) if toss_done else []
+    t1s   = xi_stats(t1_xi)
+    t2s   = xi_stats(t2_xi)
+
+    EPS    = 1e-6
+    t1_bvb = t1s["avg_strike_rate"] / max(t2s["avg_economy"], EPS)
+    t2_bvb = t2s["avg_strike_rate"] / max(t1s["avg_economy"], EPS)
+
+    t1_op = team_oppener_lookup.get(team1, {"opener_avg_batting_avg": 25.0, "opener_avg_strike_rate": 130.0})
+    t2_op = team_oppener_lookup.get(team2, {"opener_avg_batting_avg": 25.0, "opener_avg_strike_rate": 130.0})
+
+    # ── Build feature dict ──
+    feat_dict = {
+        "team1"                   : float(t1_enc),
+        "team2"                   : float(t2_enc),
+        "venue"                   : float(v_enc),
+        "venue_avg_first_innings" : avg_inn,
+        "venue_recent_avg"        : rec_avg,
+        "is_home_team1"           : float(is_home),
+        "toss_winner_is_team1"    : float(toss_t1),
+        "toss_decision_bat"       : float(toss_bat),
+        "h2h_team1_wins"          : float(h1),
+        "h2h_team2_wins"          : float(h2),
+        "chase_win_pct_team1"     : c1,
+        "chase_win_pct_team2"     : c2,
+        "high_score_chase_t1"     : hc1,
+        "high_score_chase_t2"     : hc2,
+        "winrate_team1"           : wr1,
+        "winrate_team2"           : wr2,
+        "last5_win_team1"         : float(l1),
+        "last5_win_team2"         : float(l2),
+        "t1_recent_avg_score"     : rs1,
+        "t2_recent_avg_score"     : rs2,
+        "t1_high_score_rate"      : hsr1,
+        "t2_high_score_rate"      : hsr2,
+        "t1_pp_bowling_economy"   : pp1,
+        "t2_pp_bowling_economy"   : pp2,
+        "season_avg_score"        : s_avg,
+        "season_year"             : float(s_yr),
+        "t1_avg_batting_avg"      : t1s["avg_batting_avg"],
+        "t1_avg_strike_rate"      : t1s["avg_strike_rate"],
+        "t1_top3_batting_avg"     : t1s["top3_batting_avg"],
+        "t1_avg_economy"          : t1s["avg_economy"],
+        "t1_avg_bowling_avg"      : t1s["avg_bowling_avg"],
+        "t1_recent_strike_rate"   : t1s["recent_strike_rate"],
+        "t1_recent_economy"       : t1s["recent_economy"],
+        "t2_avg_batting_avg"      : t2s["avg_batting_avg"],
+        "t2_avg_strike_rate"      : t2s["avg_strike_rate"],
+        "t2_top3_batting_avg"     : t2s["top3_batting_avg"],
+        "t2_avg_economy"          : t2s["avg_economy"],
+        "t2_avg_bowling_avg"      : t2s["avg_bowling_avg"],
+        "t2_recent_strike_rate"   : t2s["recent_strike_rate"],
+        "t2_recent_economy"       : t2s["recent_economy"],
+        "t1_opener_batting_avg"   : float(t1_op["opener_avg_batting_avg"]),
+        "t1_opener_strike_rate"   : float(t1_op["opener_avg_strike_rate"]),
+        "t2_opener_batting_avg"   : float(t2_op["opener_avg_batting_avg"]),
+        "t2_opener_strike_rate"   : float(t2_op["opener_avg_strike_rate"]),
+        "t1_bat_vs_bowl"          : t1_bvb,
+        "t2_bat_vs_bowl"          : t2_bvb,
+        "t1_rolling_season_avg"   : rs1_15,
+        "t2_rolling_season_avg"   : rs2_15,
     }
 
-    df = pd.DataFrame([row])
-    return df.reindex(columns=feature_cols, fill_value=0.0).fillna(0.0)
+    # ── Check for mismatched features ──
+    missing_in_dict = [c for c in feature_cols if c not in feat_dict]
+    if missing_in_dict:
+        print(f"⚠️  Features in feature_cols but missing from feat_dict: {missing_in_dict}")
+        print("   Add these keys to feat_dict in build_feature_vector()")
+
+    extra_in_dict = [k for k in feat_dict if k not in feature_cols]
+    if extra_in_dict:
+        print(f"ℹ️  Keys in feat_dict but not in feature_cols (ignored): {extra_in_dict}")
+
+    # Build vector in exact feature_cols order
+    features = [[float(feat_dict.get(col, 0.0)) for col in feature_cols]]
+
+    return features
 
 
-# ─────────────────────────────────────────────────────────
-# CLI — python -m scraper.espncricinfo_scraper
-# ─────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    import json, sys
+# ════════════════════════════════════════════════════════
+# FUNCTION 4: Manual input (backup when API fails)
+# ════════════════════════════════════════════════════════
 
-    if len(sys.argv) > 1:
-        mid = int(sys.argv[1])
-        print(f"[CLI] Using provided match_id: {mid}")
-    else:
-        mid = get_todays_match_id()
+def manual_match_input(team1, team2, venue,
+                        toss_winner, toss_decision,
+                        team1_xi=None, team2_xi=None):
+    """
+    Create match_info manually when API is not working.
 
-    if mid:
-        result = scrape_match(mid)
-        print(json.dumps(result, indent=4, default=str))
-    else:
-        print("No match found. Add today's match to KNOWN_MATCHES or pass match_id as arg.")
-        print("Usage: python -m scraper.espncricinfo_scraper 1529286")
+    Example:
+        from espncricinfo_scraper import manual_match_input
+        info = manual_match_input(
+            team1         = "Mumbai Indians",
+            team2         = "Chennai Super Kings",
+            venue         = "Wankhede Stadium, Mumbai",
+            toss_winner   = "Mumbai Indians",
+            toss_decision = "bat",
+        )
+    """
+    toss_loser   = team2 if toss_winner == team1 else team1
+    chasing_team = toss_loser if toss_decision == "bat" else toss_winner
+
+    return {
+        "team1"         : team1,
+        "team2"         : team2,
+        "venue"         : venue,
+        "toss_done"     : True,
+        "toss_winner"   : toss_winner,
+        "toss_decision" : toss_decision,
+        "toss_loser"    : toss_loser,
+        "chasing_team"  : chasing_team,
+        "team1_xi"      : list(team1_xi) if team1_xi else [],
+        "team2_xi"      : list(team2_xi) if team2_xi else [],
+    }

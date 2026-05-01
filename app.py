@@ -361,8 +361,6 @@ if go:
         t1.metric("Winner",       match_info.get('toss_winner', 'N/A'))
         t2.metric("Decision",     match_info.get('toss_decision', 'N/A').capitalize())
         t3.metric("Chasing Team", match_info.get('chasing_team', 'N/A'))
-    print("Expected features:", opener_model.feature_names_in_)
-    print("Provided features:", feats.columns if hasattr(feats, "columns") else "Array shape: " + str(feats.shape))
 
     # ── H2H ───────────────────────────────────────────────
     st.markdown('<div class="sh">⚔️ Head to Head</div>', unsafe_allow_html=True)
