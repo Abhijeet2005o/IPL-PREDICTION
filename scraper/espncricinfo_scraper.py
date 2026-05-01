@@ -20,7 +20,7 @@ import os
 import re
 import time
 import random
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import requests
 from bs4 import BeautifulSoup
@@ -266,22 +266,115 @@ def _html_find_match_id():
     if not html:
         return None
 
+    def _parse_date_from_text(text):
+        if not text:
+            return None
+
+        month_names = {
+            'jan': 1, 'january': 1,
+            'feb': 2, 'february': 2,
+            'mar': 3, 'march': 3,
+            'apr': 4, 'april': 4,
+            'may': 5,
+            'jun': 6, 'june': 6,
+            'jul': 7, 'july': 7,
+            'aug': 8, 'august': 8,
+            'sep': 9, 'sept': 9, 'september': 9,
+            'oct': 10, 'october': 10,
+            'nov': 11, 'november': 11,
+            'dec': 12, 'december': 12,
+        }
+
+        patterns = [
+            r'\b(?P<month>Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(?P<day>\d{1,2})(?:,?\s*(?P<year>\d{4}))?',
+            r'\b(?P<day>\d{1,2})\s+(?P<month>Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)(?:,?\s*(?P<year>\d{4}))?',
+        ]
+
+        for pattern in patterns:
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                month = month_names.get(m.group('month').lower())
+                day = int(m.group('day'))
+                year = int(m.group('year')) if m.group('year') else date.today().year
+                if month is None:
+                    continue
+                if year == date.today().year and month < date.today().month - 6:
+                    year += 1
+                try:
+                    return date(year, month, day)
+                except ValueError:
+                    continue
+        return None
+
+    def _parse_time_from_text(text):
+        if not text:
+            return None
+
+        m = re.search(r"\b(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*(?P<ampm>[AaPp][Mm])?\b", text)
+        if not m:
+            return None
+        hour = int(m.group('hour'))
+        minute = int(m.group('minute'))
+        ampm = m.group('ampm')
+        if ampm:
+            if ampm.lower() == 'pm' and hour != 12:
+                hour += 12
+            elif ampm.lower() == 'am' and hour == 12:
+                hour = 0
+        return hour, minute
+
+    def _parse_match_datetime(text):
+        match_date = _parse_date_from_text(text)
+        if not match_date:
+            return None
+        time_parts = _parse_time_from_text(text)
+        if time_parts:
+            hour, minute = time_parts
+        else:
+            hour, minute = 12, 0
+        return datetime(match_date.year, match_date.month, match_date.day, hour, minute)
+
     soup = BeautifulSoup(html, "html.parser")
 
-    # Match page links contain the fixture ID as the last numeric segment
-    # e.g. /series/ipl-2026-1510719/rr-vs-dc-43rd-match-1529286/live-cricket-score
-    seen, matches_found = set(), []
+    seen, candidates, matches_found = set(), [], []
+    now = datetime.now()
+
     for a in soup.find_all("a", href=True):
         href = a["href"]
         m = re.search(r'/series/ipl-2026-\d+/.+-(\d{7,})/', href)
         if not m:
-            # Broader pattern
             m = re.search(r'[/-](\d{7,})(?:/|$)', href)
-        if m:
-            mid = int(m.group(1))
-            if mid not in seen:
-                seen.add(mid)
-                matches_found.append(mid)
+        if not m:
+            continue
+
+        mid = int(m.group(1))
+        if mid in seen:
+            continue
+        seen.add(mid)
+        matches_found.append(mid)
+
+        match_dt = None
+        container = a
+        for _ in range(4):
+            text = container.get_text(" ", strip=True)
+            match_dt = _parse_match_datetime(text)
+            if match_dt:
+                break
+            container = container.parent
+            if container is None:
+                break
+
+        if match_dt:
+            candidates.append((match_dt, mid))
+
+    if candidates:
+        future = [item for item in candidates if item[0] >= now]
+        chosen = min(future or candidates, key=lambda item: item[0])
+        print(
+            f"[scraper] Schedule HTML found {len(candidates)} dated match IDs, "
+            f"using: {chosen[1]} @ {chosen[0].isoformat()}"
+        )
+        return chosen[1]
 
     if matches_found:
         print(f"[scraper] Schedule HTML found {len(matches_found)} match IDs, using: {matches_found[0]}")
@@ -402,11 +495,7 @@ def scrape_match(match_id):
             print(f"[scraper] Info via ESPN API: {info['team1']} vs {info['team2']}")
             return info
     elif event:
-        # ESPN returned a different event ID — still try parsing it
-        info = _espn_parse_event(event)
-        if info.get("team1") and info.get("team2"):
-            print(f"[scraper] Info via ESPN API (id mismatch, using anyway): {info['team1']} vs {info['team2']}")
-            return info
+        print(f"[scraper] ESPN API returned event id={eid}, expected {match_id}; falling back to HTML")
 
     # Fallback: ESPNcricinfo match page HTML
     info = _html_match_info(match_id)
