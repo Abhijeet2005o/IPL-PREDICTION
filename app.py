@@ -6,14 +6,16 @@
 
 import streamlit as st
 import pandas as pd
-import numpy as np
 import joblib
 import pickle
 import sys
 import os
 from datetime import datetime
 
-sys.path.append(os.path.abspath(r'C:\Users\black\ipl-prediction'))
+# Ensure local imports work regardless of machine-specific absolute paths.
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
 
 from scraper import espncricinfo_scraper
 from scraper.espncricinfo_scraper import (
@@ -22,6 +24,10 @@ from scraper.espncricinfo_scraper import (
     build_feature_vector,
     IPL_SERIES_ID,
 )
+
+ENV_SERIES_ID = os.getenv("IPL_SERIES_ID", "").strip()
+if ENV_SERIES_ID:
+    espncricinfo_scraper.IPL_SERIES_ID = ENV_SERIES_ID
 
 # ─────────────────────────────────────────────────────────
 # PAGE CONFIG
@@ -88,12 +94,14 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
 .form-card {
     background: #f8fafc;
+    color: #111827;
     border-left: 4px solid #0f1b4c;
     padding: 0.9rem 1.1rem;
     border-radius: 8px;
     margin: 0.3rem 0;
     line-height: 1.6;
 }
+.form-card b { color: #111827; }
 .player-tag {
     display: inline-block;
     background: #eff6ff;
@@ -125,7 +133,6 @@ def load_everything():
     winner_model = joblib.load('models/winner_model.pkl')
     score_model  = joblib.load('models/score_model.pkl')
     opener_model = joblib.load('models/opener_model.pkl')
-    second_model = joblib.load('models/second_innings_model.pkl')
 
     team_encoder  = joblib.load('models/team_encoder.pkl')
     venue_encoder = joblib.load('models/venue_encoder.pkl')
@@ -163,15 +170,15 @@ def load_everything():
         for _, row in op_df.iterrows()
     }
 
-    return (winner_model, score_model, opener_model, second_model,
+    return (winner_model, score_model, opener_model,
             team_encoder, venue_encoder, player_lookup, feature_cols,
             m_clean, vsh, tsl, pp_eco, op_lkp)
 
 
-(winner_model, score_model, opener_model, second_model,
+(winner_model, score_model, opener_model,
  team_encoder, venue_encoder, player_lookup, feature_cols,
  matches, venue_score_history, team_scores_long,
- team_pp_eco_lookup, team_oppener_lookup) = load_everything()
+ team_pp_eco_lookup, team_opener_lookup) = load_everything()
 
 
 # ─────────────────────────────────────────────────────────
@@ -226,6 +233,35 @@ def get_team_recent_high_score_rate(team, current_date, n=10):
     return float((past['first_innings_score'] >= threshold).mean()) if len(past) else 0.3
 
 
+def align_features_for_model(base_feats, model):
+    """
+    Aligns a base feature frame to the exact schema expected by a model.
+    Useful when different models were trained with different feature sets.
+    """
+    expected = list(getattr(model, "feature_names_in_", []))
+    if not expected:
+        return base_feats
+
+    aligned = pd.DataFrame(index=base_feats.index)
+    for col in expected:
+        if col in base_feats.columns:
+            aligned[col] = base_feats[col]
+        elif col == "opp_pp_economy" and "t2_pp_bowling_economy" in base_feats.columns:
+            # opener_model (older schema) expects opponent PP economy.
+            aligned[col] = base_feats["t2_pp_bowling_economy"]
+        else:
+            aligned[col] = 0.0
+    return aligned
+
+
+def parse_xi_input(raw_text):
+    if not raw_text or not raw_text.strip():
+        return []
+    parts = [p.strip() for p in raw_text.split(",")]
+    players = [p for p in parts if p]
+    return players[:11]
+
+
 # ─────────────────────────────────────────────────────────
 # SIDEBAR — manual controls
 # ─────────────────────────────────────────────────────────
@@ -246,6 +282,20 @@ with st.sidebar:
     )
     manual_series_id = st.text_input(
         "Series ID override", value="", placeholder="default: 1510719"
+    )
+    st.markdown("### 👥 Manual Playing XI (optional)")
+    st.caption("Comma-separated players. Used if scraper cannot detect post-toss XI.")
+    manual_team1_xi = st.text_area(
+        "Team 1 XI",
+        value="",
+        placeholder="Player1, Player2, Player3, ...",
+        height=90,
+    )
+    manual_team2_xi = st.text_area(
+        "Team 2 XI",
+        value="",
+        placeholder="Player1, Player2, Player3, ...",
+        height=90,
     )
     st.markdown("---")
     st.markdown(
@@ -282,7 +332,13 @@ if go:
 
     # ── Step 1: Match ID ──────────────────────────────────
     if manual_match_id.strip():
-        match_id = int(manual_match_id.strip())
+        try:
+            match_id = int(manual_match_id.strip())
+        except ValueError:
+            st.markdown('<div class="badge badge-error">❌ Invalid Match ID</div>',
+                        unsafe_allow_html=True)
+            st.error("Match ID must be numeric. Example: `1529286`")
+            st.stop()
         st.success(f"🔧 Using manually entered match ID: `{match_id}`")
     else:
         with st.spinner("🔍 Finding today's match…"):
@@ -295,7 +351,9 @@ if go:
             "**Auto-detection found no match today.**\n\n"
             "**Fix — 3 options (pick any):**\n\n"
             "1. **Sidebar override** → paste the Match ID from the ESPNcricinfo URL\n"
-            "2. Set env variable and restart: `set IPL_SERIES_ID=1510719`\n"
+            "2. Set env variable and restart: "
+            "`$env:IPL_SERIES_ID='1510719'` (PowerShell) / "
+            "`set IPL_SERIES_ID=1510719` (CMD)\n"
             "3. Wait — the match page may not be live yet (try 1-2 hrs before start)"
         )
         st.stop()
@@ -309,31 +367,54 @@ if go:
     with st.expander("🐛 Debug — raw scraper output"):
         st.json(match_info or {})
 
-    if not match_info or not match_info.get("team1"):
+    if not match_info or match_info.get("error") or not match_info.get("team1"):
         st.markdown('<div class="badge badge-error">❌ Data Fetch Failed</div>',
                     unsafe_allow_html=True)
-        st.error(
+        msg = (
             "**Could not read match data.**\n\n"
             "Try:\n"
             "- Wait a few minutes and click again (page may not be live)\n"
             "- Confirm the Match ID is correct via the sidebar"
         )
+        if match_info and match_info.get("error"):
+            msg += f"\n\nTechnical error: `{match_info['error']}`"
+        st.error(msg)
         st.stop()
+
+    manual_xi_1 = parse_xi_input(manual_team1_xi)
+    manual_xi_2 = parse_xi_input(manual_team2_xi)
+    if manual_xi_1:
+        match_info["team1_xi"] = manual_xi_1
+    if manual_xi_2:
+        match_info["team2_xi"] = manual_xi_2
 
     # ── Step 3: Predict ───────────────────────────────────
     feats = build_feature_vector(
         match_info, player_lookup, matches,
         team_encoder, venue_encoder, venue_score_history,
-        team_pp_eco_lookup, team_oppener_lookup,
+        team_pp_eco_lookup, team_opener_lookup,
         get_team_recent_avg_score, get_season_avg_score,
         get_season_year, get_venue_recent_avg_score,
         get_team_recent_high_score_rate, feature_cols,
     )
 
-    w_pred  = winner_model.predict(feats)[0]
-    w_prob  = winner_model.predict_proba(feats)[0]
-    s_pred  = score_model.predict(feats)[0]
-    op_pred = opener_model.predict(feats)[0]
+    w_feats = align_features_for_model(feats, winner_model)
+    s_feats = align_features_for_model(feats, score_model)
+    o_feats = align_features_for_model(feats, opener_model)
+
+    try:
+        w_pred  = winner_model.predict(w_feats)[0]
+        w_prob  = winner_model.predict_proba(w_feats)[0]
+        s_pred  = score_model.predict(s_feats)[0]
+        op_pred = opener_model.predict(o_feats)[0]
+    except Exception as pred_err:
+        st.markdown('<div class="badge badge-error">❌ Prediction Failed</div>',
+                    unsafe_allow_html=True)
+        st.error(
+            "Model prediction failed. This is usually due to incompatible "
+            f"model/data versions.\n\nTechnical error: `{pred_err}`"
+        )
+        st.stop()
 
     pred_winner = match_info['team1'] if w_pred == 1 else match_info['team2']
     win_prob    = w_prob[int(w_pred)] * 100
@@ -408,7 +489,13 @@ if go:
                 st.markdown(f'<span class="player-tag">🏏 {p}</span>',
                             unsafe_allow_html=True)
     else:
-        st.info("⏳ Playing XI will appear once announced post-toss.")
+        if toss_done:
+            st.warning(
+                "Playing XI not available from source yet. "
+                "You can paste XI manually in the sidebar for better accuracy."
+            )
+        else:
+            st.info("⏳ Playing XI will appear once announced post-toss.")
 
     # ── Prediction ────────────────────────────────────────
     st.markdown("---")

@@ -2,7 +2,7 @@ pandas
 numpy
 matplotlib
 seaborn
-scikit-learn
+scikit-learn==1.7.2
 xgboost
 lightgbm
 streamlit
@@ -10,3 +10,4 @@ requests
 beautifulsoup4
 joblib
 plotly
+cricdata
