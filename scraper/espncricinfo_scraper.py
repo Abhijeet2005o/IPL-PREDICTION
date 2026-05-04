@@ -316,7 +316,7 @@ def scrape_match(match_id):
                 "team1": team1,
                 "team2": team2,
                 "venue": venue,
-                "toss_done": bool(toss_winner),
+                "toss_done": bool(toss_winner),  # Add this line
                 "toss_winner": toss_winner or None,
                 "toss_decision": toss_decision,
                 "chasing_team": chasing_team,
@@ -367,12 +367,12 @@ def scrape_match(match_id):
             "team1": team1,
             "team2": team2,
             "venue": venue,
-            "toss_done": bool(toss_winner),
+            "toss_done": bool(toss_winner),  # Add this line
             "toss_winner": toss_winner,
             "toss_decision": toss_decision,
             "chasing_team": chasing_team,
             "team1_xi": team1_xi,
-            "team2_xi": team2_xi,
+            "team2_xi": teamxi_xi,
             "scraped_at": datetime.utcnow().isoformat() + "Z",
         }
     except Exception as exc:
