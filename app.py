@@ -409,50 +409,116 @@ st.markdown("""
     margin-top: 0.3rem;
 }
 
-/* ── Toss Card ── */
+/* ═════════════════════════════════════════════════════════
+   TOSS CARD — NEW vertical mobile-friendly layout
+   ═════════════════════════════════════════════════════════ */
 .toss-card {
     background: linear-gradient(135deg,
         rgba(255,215,0,0.06) 0%,
-        rgba(13,17,23,0.8) 100%);
-    border: 1px solid rgba(255,215,0,0.15);
+        rgba(13,17,23,0.85) 100%);
+    border: 1px solid rgba(255,215,0,0.18);
     border-radius: 20px;
-    padding: 1.5rem;
+    padding: 1.8rem 1.5rem;
+    margin: 0.8rem 0;
+    position: relative;
+    overflow: hidden;
+}
+.toss-card::before {
+    content: '';
+    position: absolute;
+    top: -40px; right: -40px;
+    width: 160px; height: 160px;
+    background: radial-gradient(circle, rgba(255,215,0,0.08) 0%, transparent 70%);
+    pointer-events: none;
+}
+
+/* Header row with coin + winner name */
+.toss-header {
     display: flex;
     align-items: center;
-    gap: 1rem;
-    margin: 0.8rem 0;
+    gap: 0.9rem;
+    margin-bottom: 1.2rem;
 }
 .toss-coin {
-    font-size: 2.5rem;
+    font-size: 2.2rem;
     animation: spin 3s ease-in-out infinite;
+    flex-shrink: 0;
 }
 @keyframes spin {
     0%, 80%, 100% { transform: rotateY(0deg); }
     40%            { transform: rotateY(180deg); }
 }
-.toss-info          { flex: 1; }
-.toss-winner-name   {
+.toss-winner-block { flex: 1; min-width: 0; }
+.toss-winner-name {
     font-family: 'Orbitron', monospace;
-    font-size: 1.1rem;
+    font-size: 1.15rem;
     font-weight: 700;
     color: #ffd700;
+    line-height: 1.2;
+    word-wrap: break-word;
 }
+.toss-won-label {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.78rem;
+    color: rgba(255,255,255,0.5);
+    margin-top: 0.2rem;
+    letter-spacing: 0.02em;
+}
+
+/* Decision row — full width, own line */
+.toss-decision-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.7rem 0.9rem;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px;
+    margin-bottom: 0.6rem;
+}
+.toss-decision-icon { font-size: 1.1rem; }
 .toss-decision-text {
     font-family: 'Inter', sans-serif;
-    font-size: 0.85rem;
-    color: rgba(255,255,255,0.55);
-    margin-top: 0.2rem;
+    font-size: 0.82rem;
+    color: rgba(255,255,255,0.6);
 }
-.decision-badge {
-    padding: 0.25rem 0.8rem;
-    border-radius: 50px;
-    font-family: 'Orbitron', monospace;
-    font-size: 0.65rem;
-    letter-spacing: 0.1em;
+.toss-decision-text b {
     font-weight: 700;
+    margin-left: 0.2rem;
 }
-.bat-badge  { background: rgba(34,197,94,0.15); border: 1px solid rgba(34,197,94,0.3); color: #22c55e; }
-.bowl-badge { background: rgba(96,165,250,0.15); border: 1px solid rgba(96,165,250,0.3); color: #60a5fa; }
+.bat-text  { color: #22c55e !important; }
+.bowl-text { color: #60a5fa !important; }
+
+/* Chasing row */
+.toss-chasing-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.7rem 0.9rem;
+    background: rgba(255,107,53,0.06);
+    border: 1px solid rgba(255,107,53,0.15);
+    border-radius: 12px;
+}
+.toss-chasing-icon { font-size: 1.1rem; }
+.toss-chasing-text {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.82rem;
+    color: rgba(255,255,255,0.6);
+}
+.toss-chasing-team {
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 700;
+    color: #ff6b35;
+    margin-left: 0.2rem;
+}
+
+/* Mobile tweaks */
+@media (max-width: 600px) {
+    .toss-coin { font-size: 1.8rem; }
+    .toss-winner-name { font-size: 1rem; }
+    .toss-decision-row, .toss-chasing-row { padding: 0.6rem 0.75rem; }
+    .toss-decision-text, .toss-chasing-text { font-size: 0.78rem; }
+}
 
 /* ── H2H Display ── */
 .h2h-bar    { display: flex; height: 8px; border-radius: 8px; overflow: hidden; margin: 0.8rem 0; background: rgba(255,255,255,0.05); }
@@ -974,33 +1040,56 @@ if go:
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Toss Card ─────────────────────────────────────────
+    # ── Toss Card (NEW vertical mobile-friendly layout) ───
     if toss_done:
         toss_winner   = match_info.get("toss_winner", "")
         toss_decision = match_info.get("toss_decision", "")
         chasing       = match_info.get("chasing_team", "")
-        dec_class     = "bat-badge"  if toss_decision == "bat" else "bowl-badge"
-        dec_label     = "🏏 Elected to BAT" if toss_decision == "bat" else "🎳 Elected to BOWL"
-        chasing_html  = (
-            f"<div class='toss-decision-text' style='margin-top:0.4rem;'>"
-            f"⚡ Chasing: <b style='color:#fff'>{chasing}</b></div>"
+
+        if toss_decision == "bat":
+            dec_icon  = "🏏"
+            dec_text  = "Elected to"
+            dec_word  = "BAT FIRST"
+            dec_color = "bat-text"
+        else:
+            dec_icon  = "🎳"
+            dec_text  = "Elected to"
+            dec_word  = "BOWL FIRST"
+            dec_color = "bowl-text"
+
+        chasing_html = (
+            f"""
+            <div class="toss-chasing-row">
+                <div class="toss-chasing-icon">⚡</div>
+                <div class="toss-chasing-text">
+                    Chasing
+                    <span class="toss-chasing-team">{chasing}</span>
+                </div>
+            </div>
+            """
             if chasing else ""
         )
+
         st.markdown(
             '<div class="fancy-divider"><span>TOSS</span></div>',
             unsafe_allow_html=True,
         )
         st.markdown(f"""
         <div class="toss-card">
-            <div class="toss-coin">🪙</div>
-            <div class="toss-info">
-                <div class="toss-winner-name">{toss_winner}</div>
-                <div class="toss-decision-text">
-                    won the toss and chose to
-                    <span class="decision-badge {dec_class}">{dec_label}</span>
+            <div class="toss-header">
+                <div class="toss-coin">🪙</div>
+                <div class="toss-winner-block">
+                    <div class="toss-winner-name">{toss_winner}</div>
+                    <div class="toss-won-label">won the toss</div>
                 </div>
-                {chasing_html}
             </div>
+            <div class="toss-decision-row">
+                <div class="toss-decision-icon">{dec_icon}</div>
+                <div class="toss-decision-text">
+                    {dec_text} <b class="{dec_color}">{dec_word}</b>
+                </div>
+            </div>
+            {chasing_html}
         </div>
         """, unsafe_allow_html=True)
 
