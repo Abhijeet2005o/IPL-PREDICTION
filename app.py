@@ -1154,9 +1154,10 @@ if go:
         '<span class="attr-yes">YES</span>' if ground["spin_friendly"]
         else '<span class="attr-no">NO</span>'
     )
-    chase_val = (
-        '<span class="attr-yes">CHASING</span>' if ground["chase_friendly"]
-        else '<span class="attr-no">DEFENDING</span>'
+    # ── New: clearer toss-strategy label ─────────────────
+    toss_strategy_val = (
+        '<span class="attr-yes">⚡ CHASE</span>' if ground["chase_friendly"]
+        else '<span class="attr-no">🛡️ SET TARGET</span>'
     )
 
     ground_html = (
@@ -1208,8 +1209,8 @@ if go:
         f'<div class="ground-attr">'
         f'<div class="ground-attr-icon">🎯</div>'
         f'<div class="ground-attr-content">'
-        f'<div class="ground-attr-label">2nd Innings</div>'
-        f'<div class="ground-attr-value">{chase_val}</div>'
+        f'<div class="ground-attr-label">If Won Toss</div>'
+        f'<div class="ground-attr-value">{toss_strategy_val}</div>'
         f'</div>'
         f'</div>'
         f'</div>'
