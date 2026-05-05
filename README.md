@@ -3,7 +3,7 @@
 AI-powered IPL match prediction using 17 years of data + live ESPNcricinfo JSON API.
 
 ## 🔗 Live Demo
-[Try the app →](https://ipl-predictor-abhijeet.streamlit.app)
+[Try the app →](https://ipl-prediction-5v74bcr4xphj5ggvcx789j.streamlit.app/)
 
 ## What It Predicts
 | Prediction | Model | Performance |
