@@ -1,502 +1,534 @@
-import re
+# app.py
+# ─────────────────────────────────────────────────────────
+# Location: ipl-prediction/app.py
+# Run with: cd ipl-prediction && streamlit run app.py
+# ─────────────────────────────────────────────────────────
+
+import streamlit as st
+import pandas as pd
+import joblib
+import pickle
+import sys
+import os
 from datetime import datetime
 
-import pandas as pd
-import requests
-from bs4 import BeautifulSoup
-from cricdata import CricinfoClient
+# Ensure local imports work regardless of machine-specific absolute paths.
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
 
-IPL_SERIES_ID = "1510719"
-LIVE_SCORES_URL = "https://www.cricbuzz.com/cricket-match/live-scores"
-MATCH_URL_TEMPLATE = "https://www.cricbuzz.com/live-cricket-scores/{match_id}"
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-_CRICINFO_CLIENT = CricinfoClient()
+from scraper import espncricinfo_scraper
+from scraper.espncricinfo_scraper import (
+    get_todays_match_id,
+    scrape_match,
+    build_feature_vector,
+    IPL_SERIES_ID,
+)
 
-TEAM_ALIASES = {
-    "CSK": "Chennai Super Kings",
-    "DC": "Delhi Capitals",
-    "DD": "Delhi Capitals",
-    "GL": "Gujarat Lions",
-    "GT": "Gujarat Titans",
-    "KKR": "Kolkata Knight Riders",
-    "LSG": "Lucknow Super Giants",
-    "MI": "Mumbai Indians",
-    "PBKS": "Punjab Kings",
-    "KXIP": "Punjab Kings",
-    "RR": "Rajasthan Royals",
-    "RCB": "Royal Challengers Bangalore",
-    "SRH": "Sunrisers Hyderabad",
-    "RPS": "Rising Pune Supergiant",
-    "PWI": "Pune Warriors",
+ENV_SERIES_ID = os.getenv("IPL_SERIES_ID", "").strip()
+if ENV_SERIES_ID:
+    espncricinfo_scraper.IPL_SERIES_ID = ENV_SERIES_ID
+
+# ─────────────────────────────────────────────────────────
+# PAGE CONFIG
+# ─────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="IPL Match Predictor",
+    page_icon="🏏",
+    layout="wide",
+)
+
+# ─────────────────────────────────────────────────────────
+# CSS
+# ─────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;600;700&display=swap');
+
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+
+.main-title {
+    text-align: center;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 3.4rem;
+    letter-spacing: 0.14em;
+    color: #0f1b4c;
+    margin-bottom: 0.15rem;
 }
+.subtitle {
+    text-align: center;
+    color: #888;
+    font-size: 0.95rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 1.8rem;
+}
+.pred-box {
+    background: linear-gradient(135deg, #0f1b4c 0%, #1e3a8a 100%);
+    color: white;
+    padding: 2.5rem;
+    border-radius: 20px;
+    text-align: center;
+    margin: 1.5rem 0;
+    box-shadow: 0 8px 32px rgba(15,27,76,0.3);
+}
+.winner-name {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 3rem;
+    letter-spacing: 0.1em;
+    margin: 0.4rem 0;
+}
+.badge {
+    display: inline-block;
+    padding: 0.3rem 1.1rem;
+    border-radius: 20px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 1rem;
+}
+.badge-live  { background: #dcfce7; color: #166534; }
+.badge-pre   { background: #fef9c3; color: #854d0e; }
+.badge-error { background: #fee2e2; color: #991b1b; }
+
+.form-card {
+    background: #f8fafc;
+    color: #111827;
+    border-left: 4px solid #0f1b4c;
+    padding: 0.9rem 1.1rem;
+    border-radius: 8px;
+    margin: 0.3rem 0;
+    line-height: 1.6;
+}
+.form-card b { color: #111827; }
+.player-tag {
+    display: inline-block;
+    background: #eff6ff;
+    color: #1d4ed8;
+    border: 1px solid #bfdbfe;
+    padding: 0.2rem 0.65rem;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    margin: 0.18rem;
+}
+.sh {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.35rem;
+    letter-spacing: 0.09em;
+    color: #0f1b4c;
+    border-bottom: 2px solid #e5e7eb;
+    padding-bottom: 4px;
+    margin: 1.3rem 0 0.6rem;
+}
+</style>
+""", unsafe_allow_html=True)
 
 
-def _clean_text(value):
-    return re.sub(r"\s+", " ", str(value or "")).strip()
+# ─────────────────────────────────────────────────────────
+# LOAD MODELS + DATA  (cached — runs once)
+# ─────────────────────────────────────────────────────────
+@st.cache_resource
+def load_everything():
+    winner_model = joblib.load('models/winner_model.pkl')
+    score_model  = joblib.load('models/score_model.pkl')
+    opener_model = joblib.load('models/opener_model.pkl')
+
+    team_encoder  = joblib.load('models/team_encoder.pkl')
+    venue_encoder = joblib.load('models/venue_encoder.pkl')
+
+    player_lookup = pd.read_csv('player_stats/player_lookup.csv')
+
+    with open('data/feature_cols.pkl', 'rb') as f:
+        feature_cols = pickle.load(f)
+
+    m_raw = pd.read_csv('data/all_ipl_matches_data.csv')
+    t_raw = pd.read_csv('data/all_teams_data.csv')
+    t_map = dict(zip(t_raw['team_id'], t_raw['team_name']))
+    m_raw['team1']  = m_raw['team1'].map(t_map)
+    m_raw['team2']  = m_raw['team2'].map(t_map)
+    m_raw['winner'] = m_raw['match_winner'].map(t_map)
+    m_raw.rename(columns={'match_id': 'id'}, inplace=True)
+    m_clean = m_raw[m_raw['result'] == 'win'].reset_index(drop=True)
+    m_clean['match_date'] = pd.to_datetime(m_clean['match_date'])
+
+    vsh = pd.read_csv('data/venue_score_history.csv')
+    vsh['match_date'] = pd.to_datetime(vsh['match_date'])
+
+    tsl = pd.read_csv('data/team_scores_long.csv')
+    tsl['match_date'] = pd.to_datetime(tsl['match_date'])
+
+    pp_df = pd.read_csv('data/team_pp_eco.csv')
+    pp_eco = dict(zip(pp_df['team_name'], pp_df['avg_pp_economy']))
+
+    op_df = pd.read_csv('data/team_opener_lookup.csv')
+    op_lkp = {
+        row['team_name']: {
+            'opener_avg_batting_avg': float(row['opener_avg_batting_avg']),
+            'opener_avg_strike_rate': float(row['opener_avg_strike_rate']),
+        }
+        for _, row in op_df.iterrows()
+    }
+
+    return (winner_model, score_model, opener_model,
+            team_encoder, venue_encoder, player_lookup, feature_cols,
+            m_clean, vsh, tsl, pp_eco, op_lkp)
 
 
-def _request_soup(url):
-    response = requests.get(url, headers=HEADERS, timeout=20)
-    response.raise_for_status()
-    return BeautifulSoup(response.text, "html.parser")
+(winner_model, score_model, opener_model,
+ team_encoder, venue_encoder, player_lookup, feature_cols,
+ matches, venue_score_history, team_scores_long,
+ team_pp_eco_lookup, team_opener_lookup) = load_everything()
 
 
-def _get_espn_live_match(match_id=None):
+# ─────────────────────────────────────────────────────────
+# STAT HELPERS
+# ─────────────────────────────────────────────────────────
+
+def get_team_recent_avg_score(team, current_date, n=5):
+    past = team_scores_long[
+        (team_scores_long['team'] == team) &
+        (team_scores_long['match_date'] < current_date)
+    ].tail(n)
+    return float(past['first_innings_score'].mean()) if len(past) else 167.0
+
+
+def get_venue_recent_avg_score(venue, current_date, n=15):
+    past = venue_score_history[
+        (venue_score_history['venue'] == venue) &
+        (venue_score_history['match_date'] < current_date)
+    ].tail(n)
+    if len(past):
+        return float(past['first_innings_score'].mean())
+    base = venue.split(',')[0].strip()
+    past2 = venue_score_history[
+        venue_score_history['venue'].str.contains(base, case=False, na=False) &
+        (venue_score_history['match_date'] < current_date)
+    ].tail(n)
+    return float(past2['first_innings_score'].mean()) if len(past2) else 167.0
+
+
+def get_season_avg_score(current_date):
+    yr = current_date.year
+    s = team_scores_long[
+        (team_scores_long['match_date'].dt.year == yr) &
+        (team_scores_long['match_date'] < current_date)
+    ]
+    if not len(s):
+        prev = team_scores_long[team_scores_long['match_date'].dt.year == yr - 1]
+        return float(prev['first_innings_score'].mean()) if len(prev) else 180.0
+    return float(s['first_innings_score'].mean())
+
+
+def get_season_year(current_date):
+    return int(current_date.year)
+
+
+def get_team_recent_high_score_rate(team, current_date, n=10):
+    threshold = float(team_scores_long['first_innings_score'].quantile(0.75))
+    past = team_scores_long[
+        (team_scores_long['team'] == team) &
+        (team_scores_long['match_date'] < current_date)
+    ].tail(n)
+    return float((past['first_innings_score'] >= threshold).mean()) if len(past) else 0.3
+
+
+def align_features_for_model(base_feats, model):
     """
-    Fetch a live/recent IPL match object from ESPN Cricinfo via cricdata.
-    If match_id is provided, returns the matching match object.
+    Aligns a base feature frame to the exact schema expected by a model.
+    Useful when different models were trained with different feature sets.
     """
-    live = _CRICINFO_CLIENT.live_matches()
-    candidates = []
-    for match in live:
-        series = match.get("series", {})
-        series_id = str(series.get("objectId", "")).strip()
-        series_name = _clean_text(series.get("longName", "")).lower()
-        if series_id == str(IPL_SERIES_ID).strip() or "indian premier league" in series_name:
-            candidates.append(match)
+    expected = list(getattr(model, "feature_names_in_", []))
+    if not expected:
+        return base_feats
+
+    aligned = pd.DataFrame(index=base_feats.index)
+    for col in expected:
+        if col in base_feats.columns:
+            aligned[col] = base_feats[col]
+        elif col == "opp_pp_economy" and "t2_pp_bowling_economy" in base_feats.columns:
+            # opener_model (older schema) expects opponent PP economy.
+            aligned[col] = base_feats["t2_pp_bowling_economy"]
+        else:
+            aligned[col] = 0.0
+    return aligned
+
+
+def parse_xi_input(raw_text):
+    if not raw_text or not raw_text.strip():
+        return []
+    parts = [p.strip() for p in raw_text.split(",")]
+    players = [p for p in parts if p]
+    return players[:11]
+
+
+# ─────────────────────────────────────────────────────────
+# SIDEBAR — manual controls
+# ─────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## 🏏 IPL Predictor")
+    st.markdown(f"**Series ID:** `{IPL_SERIES_ID}`")
+    st.markdown("---")
+
+    st.markdown("### 🔧 Manual Override")
+    st.caption(
+        "Auto-detection failed? Paste the **Match ID** from the "
+        "ESPNcricinfo URL:\n\n"
+        "`/series/ipl-2026-1510719/`**`rr-vs-dc-43rd-match-`**`1529286`"
+        "`/live-cricket-score`"
+    )
+    manual_match_id = st.text_input(
+        "Match ID", value="", placeholder="e.g. 1529286"
+    )
+    manual_series_id = st.text_input(
+        "Series ID override", value="", placeholder="default: 1510719"
+    )
+    st.markdown("### 👥 Manual Playing XI (optional)")
+    st.caption("Comma-separated players. Used if scraper cannot detect post-toss XI.")
+    manual_team1_xi = st.text_area(
+        "Team 1 XI",
+        value="",
+        placeholder="Player1, Player2, Player3, ...",
+        height=90,
+    )
+    manual_team2_xi = st.text_area(
+        "Team 2 XI",
+        value="",
+        placeholder="Player1, Player2, Player3, ...",
+        height=90,
+    )
+    st.markdown("---")
+    st.markdown(
+        "📅 [Today's schedule]"
+        "(https://www.espncricinfo.com/series/ipl-2026-1510719/"
+        "match-schedule-fixtures-and-results)"
+    )
+
+
+# ─────────────────────────────────────────────────────────
+# HEADER
+# ─────────────────────────────────────────────────────────
+st.markdown('<div class="main-title">🏏 IPL MATCH PREDICTOR</div>',
+            unsafe_allow_html=True)
+st.markdown('<div class="subtitle">AI · Automatic · IPL 2026</div>',
+            unsafe_allow_html=True)
+st.markdown("---")
+
+col1, col2, col3 = st.columns([2, 1, 2])
+with col2:
+    go = st.button("🎯 GET PREDICTION", use_container_width=True, type="primary")
+
+
+# ─────────────────────────────────────────────────────────
+# PREDICTION FLOW
+# ─────────────────────────────────────────────────────────
+if go:
+    today_ts = pd.Timestamp(datetime.today().date())
+
+    # Apply manual series ID override if given
+    if manual_series_id.strip():
+        espncricinfo_scraper.IPL_SERIES_ID = manual_series_id.strip()
+        st.info(f"🔧 Series ID overridden to: `{manual_series_id.strip()}`")
+
+    # ── Step 1: Match ID ──────────────────────────────────
+    if manual_match_id.strip():
+        try:
+            match_id = int(manual_match_id.strip())
+        except ValueError:
+            st.markdown('<div class="badge badge-error">❌ Invalid Match ID</div>',
+                        unsafe_allow_html=True)
+            st.error("Match ID must be numeric. Example: `1529286`")
+            st.stop()
+        st.success(f"🔧 Using manually entered match ID: `{match_id}`")
+    else:
+        with st.spinner("🔍 Finding today's match…"):
+            match_id = get_todays_match_id()
 
     if match_id is None:
-        return candidates[0] if candidates else None
+        st.markdown('<div class="badge badge-error">❌ No Match Found</div>',
+                    unsafe_allow_html=True)
+        st.error(
+            "**Auto-detection found no match today.**\n\n"
+            "**Fix — 3 options (pick any):**\n\n"
+            "1. **Sidebar override** → paste the Match ID from the ESPNcricinfo URL\n"
+            "2. Set env variable and restart: "
+            "`$env:IPL_SERIES_ID='1510719'` (PowerShell) / "
+            "`set IPL_SERIES_ID=1510719` (CMD)\n"
+            "3. Wait — the match page may not be live yet (try 1-2 hrs before start)"
+        )
+        st.stop()
 
-    match_id = str(match_id).strip()
-    for match in candidates:
-        if str(match.get("objectId", "")).strip() == match_id:
-            return match
-    return None
+    st.caption(f"📌 Match ID: `{match_id}` · Series: `{espncricinfo_scraper.IPL_SERIES_ID}`")
 
+    # ── Step 2: Match Info ────────────────────────────────
+    with st.spinner("📡 Fetching match data…"):
+        match_info = scrape_match(match_id)
 
-def _extract_xi_from_scorecard(scorecard):
-    team_xi = {}
-    team_players = (
-        scorecard.get("content", {})
-        .get("matchPlayers", {})
-        .get("teamPlayers", [])
+    with st.expander("🐛 Debug — raw scraper output"):
+        st.json(match_info or {})
+
+    if not match_info or match_info.get("error") or not match_info.get("team1"):
+        st.markdown('<div class="badge badge-error">❌ Data Fetch Failed</div>',
+                    unsafe_allow_html=True)
+        msg = (
+            "**Could not read match data.**\n\n"
+            "Try:\n"
+            "- Wait a few minutes and click again (page may not be live)\n"
+            "- Confirm the Match ID is correct via the sidebar"
+        )
+        if match_info and match_info.get("error"):
+            msg += f"\n\nTechnical error: `{match_info['error']}`"
+        st.error(msg)
+        st.stop()
+
+    manual_xi_1 = parse_xi_input(manual_team1_xi)
+    manual_xi_2 = parse_xi_input(manual_team2_xi)
+    if manual_xi_1:
+        match_info["team1_xi"] = manual_xi_1
+    if manual_xi_2:
+        match_info["team2_xi"] = manual_xi_2
+
+    # ── Step 3: Predict ───────────────────────────────────
+    feats = build_feature_vector(
+        match_info, player_lookup, matches,
+        team_encoder, venue_encoder, venue_score_history,
+        team_pp_eco_lookup, team_opener_lookup,
+        get_team_recent_avg_score, get_season_avg_score,
+        get_season_year, get_venue_recent_avg_score,
+        get_team_recent_high_score_rate, feature_cols,
     )
-    for entry in team_players:
-        team_name = _clean_text(entry.get("team", {}).get("longName", ""))
-        players = entry.get("players", []) or []
-        names = []
-        for player in players:
-            name = _clean_text(player.get("player", {}).get("longName", ""))
-            if name:
-                names.append(name)
-        if team_name and names:
-            team_xi[team_name] = names[:11]
-    return team_xi
 
+    w_feats = align_features_for_model(feats, winner_model)
+    s_feats = align_features_for_model(feats, score_model)
+    o_feats = align_features_for_model(feats, opener_model)
 
-def _normalize_team_name(name, team_encoder=None):
-    name = _clean_text(name)
-    if not name:
-        return name
-    if name in TEAM_ALIASES:
-        return TEAM_ALIASES[name]
-    if team_encoder is not None:
-        classes = set(team_encoder.classes_.tolist())
-        if name in classes:
-            return name
-    for short, full in TEAM_ALIASES.items():
-        if name.upper() == short:
-            return full
-    return name
-
-
-def _safe_encode(encoder, value):
-    classes = set(encoder.classes_.tolist())
-    if value in classes:
-        return int(encoder.transform([value])[0])
-    return int(encoder.transform([encoder.classes_[0]])[0])
-
-
-def _safe_div(num, den, fallback):
-    return float(num / den) if den else float(fallback)
-
-
-def _split_player_list(raw_text):
-    text = _clean_text(raw_text)
-    if not text:
-        return []
-    text = re.sub(r"\s*\(.*?\)", "", text)
-    parts = re.split(r"\s*,\s*|\s+[•|]\s+|\s{2,}", text)
-    players = []
-    for name in parts:
-        clean_name = _clean_text(name)
-        if clean_name and clean_name.lower() not in {"playing xi", "impact subs"}:
-            players.append(clean_name)
-    # Keep unique players in order.
-    seen = set()
-    uniq = []
-    for p in players:
-        key = p.lower()
-        if key not in seen:
-            seen.add(key)
-            uniq.append(p)
-    return uniq
-
-
-def _extract_playing_xi(page_text, team1, team2):
-    if not page_text:
-        return [], []
-
-    t1_xi = []
-    t2_xi = []
-
-    if team1 and team2:
-        t1_pat = re.compile(
-            rf"{re.escape(team1)}\s*Playing\s*XI\s*[:\-]\s*(.*?)(?={re.escape(team2)}\s*Playing\s*XI|Impact\s*Subs|$)",
-            flags=re.I,
+    try:
+        w_pred  = winner_model.predict(w_feats)[0]
+        w_prob  = winner_model.predict_proba(w_feats)[0]
+        s_pred  = score_model.predict(s_feats)[0]
+        op_pred = opener_model.predict(o_feats)[0]
+    except Exception as pred_err:
+        st.markdown('<div class="badge badge-error">❌ Prediction Failed</div>',
+                    unsafe_allow_html=True)
+        st.error(
+            "Model prediction failed. This is usually due to incompatible "
+            f"model/data versions.\n\nTechnical error: `{pred_err}`"
         )
-        t2_pat = re.compile(
-            rf"{re.escape(team2)}\s*Playing\s*XI\s*[:\-]\s*(.*?)(?={re.escape(team1)}\s*Playing\s*XI|Impact\s*Subs|$)",
-            flags=re.I,
-        )
-        m1 = t1_pat.search(page_text)
-        m2 = t2_pat.search(page_text)
-        if m1:
-            t1_xi = _split_player_list(m1.group(1))
-        if m2:
-            t2_xi = _split_player_list(m2.group(1))
+        st.stop()
 
-    if not t1_xi or not t2_xi:
-        generic = re.findall(r"Playing\s*XI\s*[:\-]\s*(.*?)(?=Playing\s*XI|Impact\s*Subs|$)", page_text, flags=re.I)
-        if len(generic) >= 2:
-            if not t1_xi:
-                t1_xi = _split_player_list(generic[0])
-            if not t2_xi:
-                t2_xi = _split_player_list(generic[1])
+    pred_winner = match_info['team1'] if w_pred == 1 else match_info['team2']
+    win_prob    = w_prob[int(w_pred)] * 100
+    toss_done   = match_info.get('toss_done', bool(match_info.get('toss_winner')))
 
-    return t1_xi[:11], t2_xi[:11]
-
-
-def _team_winrate(matches, team):
-    team_matches = matches[(matches["team1"] == team) | (matches["team2"] == team)]
-    if team_matches.empty:
-        return 0.5, 0.5
-    overall = (team_matches["winner"] == team).mean()
-    recent = (team_matches.tail(5)["winner"] == team).mean()
-    return float(overall), float(recent)
-
-
-def _h2h(matches, team1, team2):
-    h2h = matches[
-        ((matches["team1"] == team1) & (matches["team2"] == team2))
-        | ((matches["team1"] == team2) & (matches["team2"] == team1))
-    ]
-    if h2h.empty:
-        return 0, 0
-    t1 = int((h2h["winner"] == team1).sum())
-    t2 = int((h2h["winner"] == team2).sum())
-    return t1, t2
-
-
-def _chase_metrics(matches, team):
-    if "win_by_wickets" not in matches.columns:
-        return 0.5, 0.4
-    team_matches = matches[(matches["team1"] == team) | (matches["team2"] == team)]
-    if team_matches.empty:
-        return 0.5, 0.4
-    chase_wins = team_matches[(team_matches["winner"] == team) & (team_matches["win_by_wickets"] > 0)]
-    chase_win_pct = _safe_div(len(chase_wins), len(team_matches), 0.5)
-    high_score_chase = 0.4 if chase_wins.empty else 1.0
-    return float(chase_win_pct), float(high_score_chase)
-
-
-def _global_player_defaults(player_lookup):
-    cols = {
-        "batting_avg": 25.0,
-        "strike_rate": 125.0,
-        "economy": 8.5,
-        "bowling_avg": 30.0,
-        "recent_strike_rate": 125.0,
-        "recent_economy": 8.5,
-    }
-    defaults = {}
-    for col, fallback in cols.items():
-        defaults[col] = float(player_lookup[col].mean()) if col in player_lookup.columns else fallback
-    defaults["top3_batting_avg"] = defaults["batting_avg"]
-    return defaults
-
-
-def _player_stats_for_xi(player_lookup, xi, defaults):
-    if not xi:
-        return defaults.copy()
-    lookup = player_lookup.copy()
-    lookup["player_norm"] = lookup["player"].astype(str).str.lower().str.strip()
-    xi_norm = [str(x).lower().strip() for x in xi if str(x).strip()]
-    selected = lookup[lookup["player_norm"].isin(xi_norm)]
-    if selected.empty:
-        return defaults.copy()
-    selected = selected.reset_index(drop=True)
-    out = {
-        "batting_avg": float(selected["batting_avg"].mean()),
-        "strike_rate": float(selected["strike_rate"].mean()),
-        "top3_batting_avg": float(selected.sort_values("batting_avg", ascending=False).head(3)["batting_avg"].mean()),
-        "economy": float(selected["economy"].mean()),
-        "bowling_avg": float(selected["bowling_avg"].mean()),
-        "recent_strike_rate": float(selected["recent_strike_rate"].mean()),
-        "recent_economy": float(selected["recent_economy"].mean()),
-    }
-    for key, value in out.items():
-        if pd.isna(value):
-            out[key] = defaults[key]
-    return out
-
-
-def get_todays_match_id():
-    """Return today's IPL match ID from ESPN Cricinfo live matches."""
-    try:
-        match = _get_espn_live_match()
-        if match:
-            return int(match.get("objectId"))
-    except Exception:
-        pass
-
-    # Fallback to previous Cricbuzz scraper behavior when ESPN fetch fails.
-    try:
-        soup = _request_soup(LIVE_SCORES_URL)
-        links = soup.select("a[href*='/live-cricket-scores/']")
-        for link in links:
-            href = link.get("href", "")
-            if "indian-premier-league" not in href.lower():
-                continue
-            m = re.search(r"/live-cricket-scores/(\d+)", href)
-            if m:
-                return int(m.group(1))
-    except Exception:
-        pass
-    return None
-
-
-def scrape_match(match_id):
-    """
-    Scrape match details from Cricbuzz for the given match ID.
-    Returns the structure expected by app.py.
-    """
-    try:
-        match = _get_espn_live_match(match_id=match_id)
-        if match:
-            series = match.get("series", {})
-            series_slug = f"{series.get('slug')}-{series.get('objectId')}"
-            match_slug = f"{match.get('slug')}-{match.get('objectId')}"
-            info = _CRICINFO_CLIENT.match_info(series_slug, match_slug)
-            scorecard = _CRICINFO_CLIENT.match_scorecard(series_slug, match_slug)
-
-            teams = match.get("teams", []) or []
-            team_names = [t.get("team", {}).get("longName", "") for t in teams]
-            team1 = _clean_text(team_names[0] if len(team_names) > 0 else "Unknown")
-            team2 = _clean_text(team_names[1] if len(team_names) > 1 else "Unknown")
-
-            venue = _clean_text(info.get("venue", {}).get("longName", "")) or _clean_text(
-                match.get("ground", {}).get("longName", "")
-            ) or "Unknown Venue"
-
-            toss = info.get("toss", {}) or {}
-            toss_winner = _clean_text(toss.get("winner_team", ""))
-            toss_decision = _clean_text(toss.get("decision", "")).lower()
-            if toss_decision in {"1", "batting"}:
-                toss_decision = "bat"
-            elif toss_decision in {"2", "bowling", "fielding"}:
-                toss_decision = "field"
-            elif toss_decision not in {"bat", "field"}:
-                toss_decision = None
-
-            chasing_team = None
-            if toss_winner and toss_decision == "bat":
-                if toss_winner in {team1, team2}:
-                    chasing_team = team2 if toss_winner == team1 else team1
-            elif toss_winner and toss_decision == "field":
-                chasing_team = toss_winner
-
-            xi_map = _extract_xi_from_scorecard(scorecard)
-            team1_xi = xi_map.get(team1, [])
-            team2_xi = xi_map.get(team2, [])
-
-            return {
-                "match_id": int(match_id),
-                "team1": team1,
-                "team2": team2,
-                "venue": venue,
-                "toss_done": bool(toss_winner),  # Add this line
-                "toss_winner": toss_winner or None,
-                "toss_decision": toss_decision,
-                "chasing_team": chasing_team,
-                "team1_xi": team1_xi,
-                "team2_xi": team2_xi,
-                "scraped_at": datetime.utcnow().isoformat() + "Z",
-            }
-    except Exception:
-        # Fall back to Cricbuzz parser below.
-        pass
-
-    try:
-        soup = _request_soup(MATCH_URL_TEMPLATE.format(match_id=match_id))
-        page_text = _clean_text(soup.get_text(" ", strip=True))
-        title_text = _clean_text(soup.title.get_text() if soup.title else "")
-
-        team1, team2 = "Unknown", "Unknown"
-        title_match = re.search(r"commentary\s*\|\s*(.*?)\s+vs\s+(.*?),", title_text, flags=re.I)
-        if title_match:
-            team1 = _clean_text(title_match.group(1))
-            team2 = _clean_text(title_match.group(2))
-
-        venue = "Unknown Venue"
-        venue_match = re.search(r"Venue:\s*(.*?)\s*•\s*Date\s*&\s*Time:", page_text, flags=re.I)
-        if venue_match:
-            venue = _clean_text(venue_match.group(1))
-
-        toss_winner = None
-        toss_decision = None
-        chasing_team = None
-        toss_match = re.search(r"Toss:\s*(.*?)\s*(Have Your Say|Recent\s*:|Live Scorecard|Info)", page_text, flags=re.I)
-        if toss_match:
-            toss_text = _clean_text(toss_match.group(1))
-            toss_winner = _clean_text(re.sub(r"\(.*?\)", "", toss_text))
-            lower_toss = toss_text.lower()
-            if "bat" in lower_toss:
-                toss_decision = "bat"
-                if toss_winner in {team1, team2}:
-                    chasing_team = team2 if toss_winner == team1 else team1
-            elif "bowl" in lower_toss or "field" in lower_toss:
-                toss_decision = "field"
-                chasing_team = toss_winner
-
-        team1_xi, team2_xi = _extract_playing_xi(page_text, team1, team2)
-
-        return {
-            "match_id": int(match_id),
-            "team1": team1,
-            "team2": team2,
-            "venue": venue,
-            "toss_done": bool(toss_winner),  # Add this line
-            "toss_winner": toss_winner,
-            "toss_decision": toss_decision,
-            "chasing_team": chasing_team,
-            "team1_xi": team1_xi,
-            "team2_xi": teamxi_xi,
-            "scraped_at": datetime.utcnow().isoformat() + "Z",
-        }
-    except Exception as exc:
-        return {"error": str(exc)}
-
-
-def build_feature_vector(
-    match_info,
-    player_lookup,
-    matches,
-    team_encoder,
-    venue_encoder,
-    venue_score_history,
-    team_pp_eco_lookup,
-    team_opener_lookup,
-    get_team_recent_avg_score,
-    get_season_avg_score,
-    get_season_year,
-    get_venue_recent_avg_score,
-    get_team_recent_high_score_rate,
-    feature_cols,
-):
-    """Build model-ready feature dataframe using available live + historical context."""
-    team1 = _normalize_team_name(match_info.get("team1"), team_encoder)
-    team2 = _normalize_team_name(match_info.get("team2"), team_encoder)
-    venue = _clean_text(match_info.get("venue", ""))
-
-    now = pd.Timestamp(datetime.today().date())
-    t1_id = _safe_encode(team_encoder, team1)
-    t2_id = _safe_encode(team_encoder, team2)
-    venue_id = _safe_encode(venue_encoder, venue if venue in set(venue_encoder.classes_.tolist()) else venue_encoder.classes_[0])
-
-    t1_h2h, t2_h2h = _h2h(matches, team1, team2)
-    t1_winrate, t1_last5 = _team_winrate(matches, team1)
-    t2_winrate, t2_last5 = _team_winrate(matches, team2)
-    t1_chase_pct, t1_high_chase = _chase_metrics(matches, team1)
-    t2_chase_pct, t2_high_chase = _chase_metrics(matches, team2)
-
-    season_avg = float(get_season_avg_score(now))
-    season_year = int(get_season_year(now))
-
-    t1_recent_avg = float(get_team_recent_avg_score(team1, now))
-    t2_recent_avg = float(get_team_recent_avg_score(team2, now))
-    t1_high_score_rate = float(get_team_recent_high_score_rate(team1, now))
-    t2_high_score_rate = float(get_team_recent_high_score_rate(team2, now))
-
-    if "venue" in venue_score_history.columns and "first_innings_score" in venue_score_history.columns:
-        vmask = venue_score_history["venue"] == venue
-        venue_avg = float(venue_score_history.loc[vmask, "first_innings_score"].mean()) if vmask.any() else 167.0
+    # ── Badge ─────────────────────────────────────────────
+    if toss_done:
+        st.markdown('<div class="badge badge-live">🟢 Post-Toss — Toss Factored In</div>',
+                    unsafe_allow_html=True)
     else:
-        venue_avg = 167.0
-    venue_recent = float(get_venue_recent_avg_score(venue, now))
+        st.markdown('<div class="badge badge-pre">🟡 Pre-Toss — Historical Estimate</div>',
+                    unsafe_allow_html=True)
 
-    toss_winner = _normalize_team_name(match_info.get("toss_winner"), team_encoder)
-    toss_done = bool(match_info.get("toss_done", toss_winner))
-    toss_decision = _clean_text(match_info.get("toss_decision", "")).lower()
+    # ── Match overview ────────────────────────────────────
+    st.markdown('<div class="sh">📊 Match Overview</div>', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("🏟️ Venue",  match_info.get('venue', 'N/A')[:45])
+    c2.metric("🔵 Team 1", match_info.get('team1', 'N/A'))
+    c3.metric("🔴 Team 2", match_info.get('team2', 'N/A'))
 
-    pp_default = float(sum(team_pp_eco_lookup.values()) / len(team_pp_eco_lookup)) if team_pp_eco_lookup else 8.5
-    t1_pp_eco = float(team_pp_eco_lookup.get(team1, pp_default))
-    t2_pp_eco = float(team_pp_eco_lookup.get(team2, pp_default))
+    # ── Toss ──────────────────────────────────────────────
+    if toss_done:
+        st.markdown('<div class="sh">🪙 Toss</div>', unsafe_allow_html=True)
+        t1, t2, t3 = st.columns(3)
+        t1.metric("Winner",       match_info.get('toss_winner', 'N/A'))
+        t2.metric("Decision",     match_info.get('toss_decision', 'N/A').capitalize())
+        t3.metric("Chasing Team", match_info.get('chasing_team', 'N/A'))
 
-    opener_default = {
-        "opener_avg_batting_avg": 30.0,
-        "opener_avg_strike_rate": 130.0,
-    }
-    t1_open = team_opener_lookup.get(team1, opener_default)
-    t2_open = team_opener_lookup.get(team2, opener_default)
+    # ── H2H ───────────────────────────────────────────────
+    st.markdown('<div class="sh">⚔️ Head to Head</div>', unsafe_allow_html=True)
+    h2h = matches[
+        ((matches['team1'] == match_info['team1']) & (matches['team2'] == match_info['team2'])) |
+        ((matches['team1'] == match_info['team2']) & (matches['team2'] == match_info['team1']))
+    ]
+    t1h = int((h2h['winner'] == match_info['team1']).sum())
+    t2h = int((h2h['winner'] == match_info['team2']).sum())
+    hc1, hc2, hc3 = st.columns(3)
+    hc1.metric(f"{match_info['team1']} wins", t1h)
+    hc2.metric("Total meetings",              t1h + t2h)
+    hc3.metric(f"{match_info['team2']} wins", t2h)
 
-    defaults = _global_player_defaults(player_lookup)
-    t1_stats = _player_stats_for_xi(player_lookup, match_info.get("team1_xi", []), defaults)
-    t2_stats = _player_stats_for_xi(player_lookup, match_info.get("team2_xi", []), defaults)
+    # ── Form ──────────────────────────────────────────────
+    st.markdown('<div class="sh">📈 Recent Form (last 5)</div>', unsafe_allow_html=True)
+    fc1, fc2 = st.columns(2)
+    rs1 = get_team_recent_avg_score(match_info['team1'], today_ts)
+    rs2 = get_team_recent_avg_score(match_info['team2'], today_ts)
+    with fc1:
+        st.markdown(
+            f'<div class="form-card">🔵 <b>{match_info["team1"]}</b><br>'
+            f'Avg first-innings score: <b>{rs1:.0f} runs</b></div>',
+            unsafe_allow_html=True,
+        )
+    with fc2:
+        st.markdown(
+            f'<div class="form-card">🔴 <b>{match_info["team2"]}</b><br>'
+            f'Avg first-innings score: <b>{rs2:.0f} runs</b></div>',
+            unsafe_allow_html=True,
+        )
 
-    feat = {c: 0.0 for c in feature_cols}
-    feat.update(
-        {
-            "team1": t1_id,
-            "team2": t2_id,
-            "venue": venue_id,
-            "venue_avg_first_innings": venue_avg,
-            "venue_recent_avg": venue_recent,
-            "is_home_team1": 0,
-            "toss_winner_is_team1": int(toss_done and toss_winner == team1),
-            "toss_decision_bat": int(toss_done and toss_decision == "bat"),
-            "h2h_team1_wins": t1_h2h,
-            "h2h_team2_wins": t2_h2h,
-            "chase_win_pct_team1": t1_chase_pct,
-            "chase_win_pct_team2": t2_chase_pct,
-            "high_score_chase_t1": t1_high_chase,
-            "high_score_chase_t2": t2_high_chase,
-            "winrate_team1": t1_winrate,
-            "winrate_team2": t2_winrate,
-            "last5_win_team1": t1_last5,
-            "last5_win_team2": t2_last5,
-            "t1_recent_avg_score": t1_recent_avg,
-            "t2_recent_avg_score": t2_recent_avg,
-            "t1_high_score_rate": t1_high_score_rate,
-            "t2_high_score_rate": t2_high_score_rate,
-            "t1_pp_bowling_economy": t1_pp_eco,
-            "t2_pp_bowling_economy": t2_pp_eco,
-            "season_avg_score": season_avg,
-            "season_year": season_year,
-            "t1_avg_batting_avg": t1_stats["batting_avg"],
-            "t1_avg_strike_rate": t1_stats["strike_rate"],
-            "t1_top3_batting_avg": t1_stats["top3_batting_avg"],
-            "t1_avg_economy": t1_stats["economy"],
-            "t1_avg_bowling_avg": t1_stats["bowling_avg"],
-            "t1_recent_strike_rate": t1_stats["recent_strike_rate"],
-            "t1_recent_economy": t1_stats["recent_economy"],
-            "t2_avg_batting_avg": t2_stats["batting_avg"],
-            "t2_avg_strike_rate": t2_stats["strike_rate"],
-            "t2_top3_batting_avg": t2_stats["top3_batting_avg"],
-            "t2_avg_economy": t2_stats["economy"],
-            "t2_avg_bowling_avg": t2_stats["bowling_avg"],
-            "t2_recent_strike_rate": t2_stats["recent_strike_rate"],
-            "t2_recent_economy": t2_stats["recent_economy"],
-            "t1_opener_batting_avg": float(t1_open.get("opener_avg_batting_avg", 30.0)),
-            "t1_opener_strike_rate": float(t1_open.get("opener_avg_strike_rate", 130.0)),
-            "t2_opener_batting_avg": float(t2_open.get("opener_avg_batting_avg", 30.0)),
-            "t2_opener_strike_rate": float(t2_open.get("opener_avg_strike_rate", 130.0)),
-            "t1_bat_vs_bowl": _safe_div(t1_stats["batting_avg"], t2_stats["bowling_avg"], 1.0),
-            "t2_bat_vs_bowl": _safe_div(t2_stats["batting_avg"], t1_stats["bowling_avg"], 1.0),
-            "t1_rolling_season_avg": t1_recent_avg,
-            "t2_rolling_season_avg": t2_recent_avg,
-        }
+    # ── Playing XI ────────────────────────────────────────
+    if toss_done and match_info.get('team1_xi'):
+        st.markdown('<div class="sh">👥 Playing XI</div>', unsafe_allow_html=True)
+        xi1, xi2 = st.columns(2)
+        with xi1:
+            st.markdown(f"**{match_info['team1']}**")
+            for p in match_info.get('team1_xi', []):
+                st.markdown(f'<span class="player-tag">🏏 {p}</span>',
+                            unsafe_allow_html=True)
+        with xi2:
+            st.markdown(f"**{match_info['team2']}**")
+            for p in match_info.get('team2_xi', []):
+                st.markdown(f'<span class="player-tag">🏏 {p}</span>',
+                            unsafe_allow_html=True)
+    else:
+        if toss_done:
+            st.warning(
+                "Playing XI not available from source yet. "
+                "You can paste XI manually in the sidebar for better accuracy."
+            )
+        else:
+            st.info("⏳ Playing XI will appear once announced post-toss.")
+
+    # ── Prediction ────────────────────────────────────────
+    st.markdown("---")
+    st.markdown(f"""
+    <div class="pred-box">
+        <div style="opacity:0.6; font-size:0.78rem; letter-spacing:0.12em; text-transform:uppercase;">
+            {'Post-Toss Prediction' if toss_done else 'Pre-Toss Estimate'}
+        </div>
+        <div style="font-size:0.9rem; margin-top:0.6rem; opacity:0.75;">🏆 Predicted Winner</div>
+        <div class="winner-name">{pred_winner}</div>
+        <div style="font-size:1.4rem; margin-top:0.2rem; font-weight:600;">
+            {win_prob:.1f}% confidence
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    pm1, pm2, pm3, pm4 = st.columns(4)
+    pm1.metric("🏆 Winner",          pred_winner)
+    pm2.metric("🎲 Win probability",  f"{win_prob:.1f}%")
+    pm3.metric("📈 1st inn. score",   f"{int(s_pred)} runs")
+    pm4.metric("🏏 Opener runs",      f"~{int(op_pred)}")
+
+    st.markdown(
+        f"**{match_info['team1']}** {win_prob:.1f}% "
+        f"&nbsp;·&nbsp; "
+        f"{100 - win_prob:.1f}% **{match_info['team2']}**"
     )
+    st.progress(int(win_prob) / 100)
 
-    return pd.DataFrame([feat], columns=feature_cols).fillna(0)
+    if not toss_done:
+        st.warning(
+            "⚠️ Pre-toss estimate — click **GET PREDICTION** again "
+            "after the toss for an updated prediction."
+        )
+
+    st.success("✅ Done!")
