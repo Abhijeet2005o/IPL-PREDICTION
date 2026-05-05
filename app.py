@@ -410,7 +410,7 @@ st.markdown("""
 }
 
 /* ═════════════════════════════════════════════════════════
-   TOSS CARD — NEW vertical mobile-friendly layout
+   TOSS CARD — vertical mobile-friendly layout
    ═════════════════════════════════════════════════════════ */
 .toss-card {
     background: linear-gradient(135deg,
@@ -432,7 +432,6 @@ st.markdown("""
     pointer-events: none;
 }
 
-/* Header row with coin + winner name */
 .toss-header {
     display: flex;
     align-items: center;
@@ -465,7 +464,6 @@ st.markdown("""
     letter-spacing: 0.02em;
 }
 
-/* Decision row — full width, own line */
 .toss-decision-row {
     display: flex;
     align-items: center;
@@ -489,7 +487,6 @@ st.markdown("""
 .bat-text  { color: #22c55e !important; }
 .bowl-text { color: #60a5fa !important; }
 
-/* Chasing row */
 .toss-chasing-row {
     display: flex;
     align-items: center;
@@ -512,7 +509,6 @@ st.markdown("""
     margin-left: 0.2rem;
 }
 
-/* Mobile tweaks */
 @media (max-width: 600px) {
     .toss-coin { font-size: 1.8rem; }
     .toss-winner-name { font-size: 1rem; }
@@ -1026,21 +1022,21 @@ if go:
         '<div class="fancy-divider"><span>MATCH</span></div>',
         unsafe_allow_html=True,
     )
-    st.markdown(f"""
-    <div class="match-vs-card">
-        <div style="display:flex;align-items:center;
-                    justify-content:center;gap:1.5rem;flex-wrap:wrap;">
-            <div><div class="team-name-big">{team1}</div></div>
-            <div class="vs-badge">VS</div>
-            <div><div class="team-name-big">{team2}</div></div>
-        </div>
-        <div style="margin-top:1rem;">
-            <span class="venue-tag">📍 {match_info.get("venue", "N/A")}</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    match_html = (
+        f'<div class="match-vs-card">'
+        f'<div style="display:flex;align-items:center;justify-content:center;gap:1.5rem;flex-wrap:wrap;">'
+        f'<div><div class="team-name-big">{team1}</div></div>'
+        f'<div class="vs-badge">VS</div>'
+        f'<div><div class="team-name-big">{team2}</div></div>'
+        f'</div>'
+        f'<div style="margin-top:1rem;">'
+        f'<span class="venue-tag">📍 {match_info.get("venue", "N/A")}</span>'
+        f'</div>'
+        f'</div>'
+    )
+    st.markdown(match_html, unsafe_allow_html=True)
 
-    # ── Toss Card (NEW vertical mobile-friendly layout) ───
+    # ── Toss Card (vertical mobile-friendly layout) ───────
     if toss_done:
         toss_winner   = match_info.get("toss_winner", "")
         toss_decision = match_info.get("toss_decision", "")
@@ -1058,40 +1054,38 @@ if go:
             dec_color = "bowl-text"
 
         chasing_html = (
-            f"""
-            <div class="toss-chasing-row">
-                <div class="toss-chasing-icon">⚡</div>
-                <div class="toss-chasing-text">
-                    Chasing
-                    <span class="toss-chasing-team">{chasing}</span>
-                </div>
-            </div>
-            """
-            if chasing else ""
-        )
+            f'<div class="toss-chasing-row">'
+            f'<div class="toss-chasing-icon">⚡</div>'
+            f'<div class="toss-chasing-text">Chasing '
+            f'<span class="toss-chasing-team">{chasing}</span>'
+            f'</div>'
+            f'</div>'
+        ) if chasing else ""
 
         st.markdown(
             '<div class="fancy-divider"><span>TOSS</span></div>',
             unsafe_allow_html=True,
         )
-        st.markdown(f"""
-        <div class="toss-card">
-            <div class="toss-header">
-                <div class="toss-coin">🪙</div>
-                <div class="toss-winner-block">
-                    <div class="toss-winner-name">{toss_winner}</div>
-                    <div class="toss-won-label">won the toss</div>
-                </div>
-            </div>
-            <div class="toss-decision-row">
-                <div class="toss-decision-icon">{dec_icon}</div>
-                <div class="toss-decision-text">
-                    {dec_text} <b class="{dec_color}">{dec_word}</b>
-                </div>
-            </div>
-            {chasing_html}
-        </div>
-        """, unsafe_allow_html=True)
+
+        toss_html = (
+            f'<div class="toss-card">'
+            f'<div class="toss-header">'
+            f'<div class="toss-coin">🪙</div>'
+            f'<div class="toss-winner-block">'
+            f'<div class="toss-winner-name">{toss_winner}</div>'
+            f'<div class="toss-won-label">won the toss</div>'
+            f'</div>'
+            f'</div>'
+            f'<div class="toss-decision-row">'
+            f'<div class="toss-decision-icon">{dec_icon}</div>'
+            f'<div class="toss-decision-text">{dec_text} '
+            f'<b class="{dec_color}">{dec_word}</b>'
+            f'</div>'
+            f'</div>'
+            f'{chasing_html}'
+            f'</div>'
+        )
+        st.markdown(toss_html, unsafe_allow_html=True)
 
     # ── Head to Head ──────────────────────────────────────
     st.markdown(
@@ -1102,38 +1096,35 @@ if go:
     t1_pct = int(t1w / total * 100) if total else 50
     t2_pct = 100 - t1_pct
 
-    st.markdown(f"""
-    <div class="glass-card">
-        <div class="sec-header">⚔️ All-Time Record</div>
-        <div style="display:flex;justify-content:space-between;
-                    align-items:center;margin-bottom:0.8rem;">
-            <div>
-                <div class="h2h-label" style="color:#ff6b35;">{t1w}</div>
-                <div class="h2h-team">{team1}</div>
-            </div>
-            <div style="text-align:center;">
-                <div style="font-family:Orbitron,monospace;font-size:0.7rem;
-                            color:rgba(255,255,255,0.3);letter-spacing:0.15em;">
-                    {total} MATCHES
-                </div>
-            </div>
-            <div style="text-align:right;">
-                <div class="h2h-label" style="color:#60a5fa;">{t2w}</div>
-                <div class="h2h-team">{team2}</div>
-            </div>
-        </div>
-        <div class="h2h-bar">
-            <div class="h2h-t1" style="width:{t1_pct}%;"></div>
-            <div class="h2h-t2" style="width:{t2_pct}%;"></div>
-        </div>
-        <div style="display:flex;justify-content:space-between;
-                    font-family:Inter,sans-serif;font-size:0.7rem;
-                    color:rgba(255,255,255,0.3);margin-top:0.4rem;">
-            <span>{t1_pct}%</span>
-            <span>{t2_pct}%</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    h2h_html = (
+        f'<div class="glass-card">'
+        f'<div class="sec-header">⚔️ All-Time Record</div>'
+        f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.8rem;">'
+        f'<div>'
+        f'<div class="h2h-label" style="color:#ff6b35;">{t1w}</div>'
+        f'<div class="h2h-team">{team1}</div>'
+        f'</div>'
+        f'<div style="text-align:center;">'
+        f'<div style="font-family:Orbitron,monospace;font-size:0.7rem;color:rgba(255,255,255,0.3);letter-spacing:0.15em;">'
+        f'{total} MATCHES'
+        f'</div>'
+        f'</div>'
+        f'<div style="text-align:right;">'
+        f'<div class="h2h-label" style="color:#60a5fa;">{t2w}</div>'
+        f'<div class="h2h-team">{team2}</div>'
+        f'</div>'
+        f'</div>'
+        f'<div class="h2h-bar">'
+        f'<div class="h2h-t1" style="width:{t1_pct}%;"></div>'
+        f'<div class="h2h-t2" style="width:{t2_pct}%;"></div>'
+        f'</div>'
+        f'<div style="display:flex;justify-content:space-between;font-family:Inter,sans-serif;font-size:0.7rem;color:rgba(255,255,255,0.3);margin-top:0.4rem;">'
+        f'<span>{t1_pct}%</span>'
+        f'<span>{t2_pct}%</span>'
+        f'</div>'
+        f'</div>'
+    )
+    st.markdown(h2h_html, unsafe_allow_html=True)
 
     # ── Recent Form ───────────────────────────────────────
     st.markdown(
@@ -1145,31 +1136,33 @@ if go:
 
     fc1, fc2 = st.columns(2)
     with fc1:
-        st.markdown(f"""
-        <div class="glass-card">
-            <div class="sec-header">🔵 {team1}</div>
-            <div class="form-row">
-                <div>
-                    <div class="form-team">Avg 1st Innings Score</div>
-                    <div class="form-label">Last 5 matches</div>
-                </div>
-                <div class="form-score">{rs1:.0f}</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        form_html_1 = (
+            f'<div class="glass-card">'
+            f'<div class="sec-header">🔵 {team1}</div>'
+            f'<div class="form-row">'
+            f'<div>'
+            f'<div class="form-team">Avg 1st Innings Score</div>'
+            f'<div class="form-label">Last 5 matches</div>'
+            f'</div>'
+            f'<div class="form-score">{rs1:.0f}</div>'
+            f'</div>'
+            f'</div>'
+        )
+        st.markdown(form_html_1, unsafe_allow_html=True)
     with fc2:
-        st.markdown(f"""
-        <div class="glass-card">
-            <div class="sec-header">🔴 {team2}</div>
-            <div class="form-row">
-                <div>
-                    <div class="form-team">Avg 1st Innings Score</div>
-                    <div class="form-label">Last 5 matches</div>
-                </div>
-                <div class="form-score">{rs2:.0f}</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        form_html_2 = (
+            f'<div class="glass-card">'
+            f'<div class="sec-header">🔴 {team2}</div>'
+            f'<div class="form-row">'
+            f'<div>'
+            f'<div class="form-team">Avg 1st Innings Score</div>'
+            f'<div class="form-label">Last 5 matches</div>'
+            f'</div>'
+            f'<div class="form-score">{rs2:.0f}</div>'
+            f'</div>'
+            f'</div>'
+        )
+        st.markdown(form_html_2, unsafe_allow_html=True)
 
     # ── Playing XI ────────────────────────────────────────
     xi_available = bool(
@@ -1186,23 +1179,25 @@ if go:
                 f'<span class="player-chip">🏏 {p}</span>'
                 for p in match_info.get("team1_xi", [])
             )
-            st.markdown(f"""
-            <div class="glass-card">
-                <div class="xi-team-label">{team1}</div>
-                <div class="player-grid">{chips1}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            xi_html_1 = (
+                f'<div class="glass-card">'
+                f'<div class="xi-team-label">{team1}</div>'
+                f'<div class="player-grid">{chips1}</div>'
+                f'</div>'
+            )
+            st.markdown(xi_html_1, unsafe_allow_html=True)
         with xc2:
             chips2 = "".join(
                 f'<span class="player-chip">🏏 {p}</span>'
                 for p in match_info.get("team2_xi", [])
             )
-            st.markdown(f"""
-            <div class="glass-card">
-                <div class="xi-team-label">{team2}</div>
-                <div class="player-grid">{chips2}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            xi_html_2 = (
+                f'<div class="glass-card">'
+                f'<div class="xi-team-label">{team2}</div>'
+                f'<div class="player-grid">{chips2}</div>'
+                f'</div>'
+            )
+            st.markdown(xi_html_2, unsafe_allow_html=True)
     elif toss_done:
         st.markdown(
             '<div class="banner banner-warn">'
@@ -1231,39 +1226,41 @@ if go:
         "⏳ PRE-TOSS · HISTORICAL ESTIMATE"
     )
 
-    st.markdown(f"""
-    <div class="pred-hero">
-        <div class="pred-label">AI MATCH PREDICTION</div>
-        <span class="pred-type-badge {badge_class}">{badge_text}</span>
-        <div class="pred-trophy">🏆</div>
-        <div class="pred-label">PREDICTED WINNER</div>
-        <div class="pred-winner">{pred_winner}</div>
-        <div class="pred-conf">{win_prob:.1f}% confidence</div>
-    </div>
-    """, unsafe_allow_html=True)
+    pred_html = (
+        f'<div class="pred-hero">'
+        f'<div class="pred-label">AI MATCH PREDICTION</div>'
+        f'<span class="pred-type-badge {badge_class}">{badge_text}</span>'
+        f'<div class="pred-trophy">🏆</div>'
+        f'<div class="pred-label">PREDICTED WINNER</div>'
+        f'<div class="pred-winner">{pred_winner}</div>'
+        f'<div class="pred-conf">{win_prob:.1f}% confidence</div>'
+        f'</div>'
+    )
+    st.markdown(pred_html, unsafe_allow_html=True)
 
     # ── Win Probability Bar ───────────────────────────────
     p1 = win_prob  if pred_winner == team1 else lose_prob
     p2 = lose_prob if pred_winner == team1 else win_prob
 
-    st.markdown(f"""
-    <div class="prob-container">
-        <div class="prob-labels">
-            <div>
-                <div class="prob-team">{team1}</div>
-                <div class="prob-pct pct-t1">{p1:.1f}%</div>
-            </div>
-            <div style="text-align:right;">
-                <div class="prob-team">{team2}</div>
-                <div class="prob-pct pct-t2">{p2:.1f}%</div>
-            </div>
-        </div>
-        <div class="prob-bar-track">
-            <div class="prob-bar-t1" style="width:{p1:.1f}%;"></div>
-            <div class="prob-bar-t2" style="width:{p2:.1f}%;"></div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    prob_html = (
+        f'<div class="prob-container">'
+        f'<div class="prob-labels">'
+        f'<div>'
+        f'<div class="prob-team">{team1}</div>'
+        f'<div class="prob-pct pct-t1">{p1:.1f}%</div>'
+        f'</div>'
+        f'<div style="text-align:right;">'
+        f'<div class="prob-team">{team2}</div>'
+        f'<div class="prob-pct pct-t2">{p2:.1f}%</div>'
+        f'</div>'
+        f'</div>'
+        f'<div class="prob-bar-track">'
+        f'<div class="prob-bar-t1" style="width:{p1:.1f}%;"></div>'
+        f'<div class="prob-bar-t2" style="width:{p2:.1f}%;"></div>'
+        f'</div>'
+        f'</div>'
+    )
+    st.markdown(prob_html, unsafe_allow_html=True)
 
     # ── Stat Tiles ────────────────────────────────────────
     sc1, sc2, sc3, sc4 = st.columns(4)
@@ -1275,25 +1272,28 @@ if go:
     ]
     for col, (icon, val, label) in zip([sc1, sc2, sc3, sc4], tiles):
         with col:
-            st.markdown(f"""
-            <div class="stat-card">
-                <div class="stat-icon">{icon}</div>
-                <div class="stat-val">{val}</div>
-                <div class="stat-label">{label}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            tile_html = (
+                f'<div class="stat-card">'
+                f'<div class="stat-icon">{icon}</div>'
+                f'<div class="stat-val">{val}</div>'
+                f'<div class="stat-label">{label}</div>'
+                f'</div>'
+            )
+            st.markdown(tile_html, unsafe_allow_html=True)
 
     # ── Footer banners ────────────────────────────────────
     if not toss_done:
-        st.markdown("""
-        <div class="banner banner-warn" style="margin-top:1.2rem;">
-            ⚠️ Pre-toss estimate — click <b>PREDICT NOW</b> again after
-            the toss for an updated prediction with toss data
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            '<div class="banner banner-warn" style="margin-top:1.2rem;">'
+            '⚠️ Pre-toss estimate — click <b>PREDICT NOW</b> again after '
+            'the toss for an updated prediction with toss data'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
-    st.markdown("""
-    <div class="banner banner-ok" style="margin-top:0.6rem;">
-        ✅ Prediction complete — results shown above
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div class="banner banner-ok" style="margin-top:0.6rem;">'
+        '✅ Prediction complete — results shown above'
+        '</div>',
+        unsafe_allow_html=True,
+    )
