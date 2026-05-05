@@ -1,4 +1,4 @@
-# app.py — Modern IPL Predictor UI
+# app.py — Modern IPL Predictor UI with Pitch Report
 # Run: streamlit run app.py
 
 import streamlit as st
@@ -15,6 +15,7 @@ if PROJECT_ROOT not in sys.path:
 
 # ── Fixed import — no circular reference ──────────────────
 from scraper import espncricinfo_scraper
+from data.ground_types import get_ground_info
 
 get_todays_match_id  = espncricinfo_scraper.get_todays_match_id
 scrape_match         = espncricinfo_scraper.scrape_match
@@ -259,6 +260,106 @@ st.markdown("""
     font-family: 'Inter', sans-serif;
     font-size: 0.8rem;
     margin-top: 0.8rem;
+}
+
+/* ═════════════════════════════════════════════════════════
+   GROUND TYPE / PITCH REPORT CARD
+   ═════════════════════════════════════════════════════════ */
+.ground-card {
+    background: linear-gradient(135deg,
+        rgba(255,255,255,0.04) 0%,
+        rgba(13,17,23,0.85) 100%);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px;
+    padding: 1.6rem 1.5rem;
+    margin: 0.8rem 0;
+    position: relative;
+    overflow: hidden;
+}
+.ground-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 4px; height: 100%;
+    background: var(--accent, #ff6b35);
+}
+
+.ground-header {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    margin-bottom: 1.2rem;
+}
+.ground-icon-big {
+    font-size: 2.4rem;
+    flex-shrink: 0;
+}
+.ground-info-block { flex: 1; min-width: 0; }
+.ground-type-name {
+    font-family: 'Orbitron', monospace;
+    font-size: 1.15rem;
+    font-weight: 700;
+    line-height: 1.2;
+    word-wrap: break-word;
+}
+.ground-venue-name {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.78rem;
+    color: rgba(255,255,255,0.5);
+    margin-top: 0.2rem;
+}
+
+.ground-desc {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.82rem;
+    color: rgba(255,255,255,0.65);
+    line-height: 1.5;
+    padding: 0.8rem 1rem;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px;
+    margin-bottom: 1rem;
+    font-style: italic;
+}
+
+.ground-attrs-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.6rem;
+}
+.ground-attr {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 0.7rem 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.ground-attr-icon { font-size: 1.1rem; flex-shrink: 0; }
+.ground-attr-content { flex: 1; min-width: 0; }
+.ground-attr-label {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.65rem;
+    color: rgba(255,255,255,0.4);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.ground-attr-value {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: #ffffff;
+    margin-top: 0.1rem;
+}
+
+.attr-yes { color: #22c55e !important; }
+.attr-no  { color: #ef4444 !important; }
+
+@media (max-width: 600px) {
+    .ground-icon-big { font-size: 2rem; }
+    .ground-type-name { font-size: 1rem; }
+    .ground-attrs-grid { grid-template-columns: 1fr 1fr; }
 }
 
 /* ── Prediction Hero Card ── */
@@ -1035,6 +1136,86 @@ if go:
         f'</div>'
     )
     st.markdown(match_html, unsafe_allow_html=True)
+
+    # ── Pitch Report / Ground Type Card ───────────────────
+    venue_name = match_info.get("venue", "")
+    ground = get_ground_info(venue_name)
+
+    st.markdown(
+        '<div class="fancy-divider"><span>PITCH REPORT</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    pace_val = (
+        '<span class="attr-yes">YES</span>' if ground["pace_friendly"]
+        else '<span class="attr-no">NO</span>'
+    )
+    spin_val = (
+        '<span class="attr-yes">YES</span>' if ground["spin_friendly"]
+        else '<span class="attr-no">NO</span>'
+    )
+    chase_val = (
+        '<span class="attr-yes">CHASING</span>' if ground["chase_friendly"]
+        else '<span class="attr-no">DEFENDING</span>'
+    )
+
+    ground_html = (
+        f'<div class="ground-card" style="--accent:{ground["color"]};">'
+        f'<div class="ground-header">'
+        f'<div class="ground-icon-big">{ground["icon"]}</div>'
+        f'<div class="ground-info-block">'
+        f'<div class="ground-type-name" style="color:{ground["color"]};">{ground["type"]}</div>'
+        f'<div class="ground-venue-name">{venue_name or "Unknown Venue"}</div>'
+        f'</div>'
+        f'</div>'
+        f'<div class="ground-desc">💡 {ground["description"]}</div>'
+        f'<div class="ground-attrs-grid">'
+        f'<div class="ground-attr">'
+        f'<div class="ground-attr-icon">📊</div>'
+        f'<div class="ground-attr-content">'
+        f'<div class="ground-attr-label">Avg Score</div>'
+        f'<div class="ground-attr-value">{ground["avg_score"]}</div>'
+        f'</div>'
+        f'</div>'
+        f'<div class="ground-attr">'
+        f'<div class="ground-attr-icon">📏</div>'
+        f'<div class="ground-attr-content">'
+        f'<div class="ground-attr-label">Boundary</div>'
+        f'<div class="ground-attr-value">{ground["boundary_size"]}</div>'
+        f'</div>'
+        f'</div>'
+        f'<div class="ground-attr">'
+        f'<div class="ground-attr-icon">⚡</div>'
+        f'<div class="ground-attr-content">'
+        f'<div class="ground-attr-label">Pace</div>'
+        f'<div class="ground-attr-value">{pace_val}</div>'
+        f'</div>'
+        f'</div>'
+        f'<div class="ground-attr">'
+        f'<div class="ground-attr-icon">🌀</div>'
+        f'<div class="ground-attr-content">'
+        f'<div class="ground-attr-label">Spin</div>'
+        f'<div class="ground-attr-value">{spin_val}</div>'
+        f'</div>'
+        f'</div>'
+        f'<div class="ground-attr">'
+        f'<div class="ground-attr-icon">💧</div>'
+        f'<div class="ground-attr-content">'
+        f'<div class="ground-attr-label">Dew Factor</div>'
+        f'<div class="ground-attr-value">{ground["dew_factor"]}</div>'
+        f'</div>'
+        f'</div>'
+        f'<div class="ground-attr">'
+        f'<div class="ground-attr-icon">🎯</div>'
+        f'<div class="ground-attr-content">'
+        f'<div class="ground-attr-label">2nd Innings</div>'
+        f'<div class="ground-attr-value">{chase_val}</div>'
+        f'</div>'
+        f'</div>'
+        f'</div>'
+        f'</div>'
+    )
+    st.markdown(ground_html, unsafe_allow_html=True)
 
     # ── Toss Card (vertical mobile-friendly layout) ───────
     if toss_done:
