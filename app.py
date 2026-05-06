@@ -210,7 +210,9 @@ st.markdown("""
     background: linear-gradient(90deg, rgba(255,107,53,0.3), transparent);
 }
 
-/* ── VS Match Card ── */
+/* ═════════════════════════════════════════════════════════
+   VS MATCH CARD — REDESIGNED
+   ═════════════════════════════════════════════════════════ */
 .match-vs-card {
     background: linear-gradient(135deg,
         rgba(255,107,53,0.08) 0%,
@@ -218,7 +220,7 @@ st.markdown("""
         rgba(255,215,0,0.05) 100%);
     border: 1px solid rgba(255,255,255,0.08);
     border-radius: 24px;
-    padding: 2.5rem 2rem;
+    padding: 2rem 1.5rem;
     text-align: center;
     position: relative;
     overflow: hidden;
@@ -229,25 +231,83 @@ st.markdown("""
     position: absolute;
     top: -50%; left: 50%;
     transform: translateX(-50%);
-    width: 200px; height: 200px;
+    width: 250px; height: 250px;
     background: radial-gradient(circle, rgba(255,107,53,0.08) 0%, transparent 70%);
     pointer-events: none;
 }
+
+/* Layout — flex stacks vertically on mobile, horizontal on desktop */
+.match-teams-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1.5rem;
+    flex-direction: column;       /* MOBILE: stack vertically */
+    position: relative;
+    z-index: 1;
+}
+
+/* Desktop: side-by-side */
+@media (min-width: 768px) {
+    .match-teams-row {
+        flex-direction: row;       /* DESKTOP: horizontal */
+        gap: 2rem;
+    }
+}
+
+.team-block {
+    flex: 1;
+    text-align: center;
+    min-width: 0;
+}
+
 .team-name-big {
     font-family: 'Orbitron', monospace;
-    font-size: clamp(1.2rem, 3vw, 2rem);
+    font-size: clamp(1.4rem, 4vw, 2.2rem);
     font-weight: 700;
     color: #ffffff;
     letter-spacing: 0.05em;
+    line-height: 1.2;
+    word-break: break-word;
 }
-.vs-badge {
+
+/* VS Badge — circular, glowing, always centered */
+.vs-circle {
+    flex-shrink: 0;
+    width: 70px;
+    height: 70px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #ff6b35 0%, #ff4500 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
     font-family: 'Orbitron', monospace;
-    font-size: 1.5rem;
+    font-size: 1.3rem;
     font-weight: 900;
-    color: #ff6b35;
-    text-shadow: 0 0 20px rgba(255,107,53,0.5);
-    padding: 0 1rem;
+    color: #ffffff;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    box-shadow:
+        0 0 30px rgba(255,107,53,0.4),
+        0 8px 20px rgba(0,0,0,0.3),
+        inset 0 -3px 10px rgba(0,0,0,0.2);
+    border: 3px solid rgba(255,255,255,0.15);
+    position: relative;
+    animation: pulseVs 2.5s ease-in-out infinite;
 }
+@keyframes pulseVs {
+    0%, 100% { transform: scale(1); box-shadow: 0 0 30px rgba(255,107,53,0.4), 0 8px 20px rgba(0,0,0,0.3); }
+    50%      { transform: scale(1.05); box-shadow: 0 0 45px rgba(255,107,53,0.6), 0 8px 20px rgba(0,0,0,0.3); }
+}
+
+@media (min-width: 768px) {
+    .vs-circle {
+        width: 80px;
+        height: 80px;
+        font-size: 1.5rem;
+    }
+}
+
+/* Venue tag below */
 .venue-tag {
     display: inline-flex;
     align-items: center;
@@ -255,11 +315,13 @@ st.markdown("""
     background: rgba(255,255,255,0.05);
     border: 1px solid rgba(255,255,255,0.1);
     color: rgba(255,255,255,0.6);
-    padding: 0.35rem 1rem;
+    padding: 0.4rem 1.2rem;
     border-radius: 50px;
     font-family: 'Inter', sans-serif;
-    font-size: 0.8rem;
-    margin-top: 0.8rem;
+    font-size: 0.82rem;
+    margin-top: 1.5rem;
+    position: relative;
+    z-index: 1;
 }
 
 /* ═════════════════════════════════════════════════════════
@@ -751,6 +813,32 @@ st.markdown("""
 .banner-info { background: rgba(96,165,250,0.1); border: 1px solid rgba(96,165,250,0.25); color: #60a5fa; }
 .banner-ok   { background: rgba(34,197,94,0.1);  border: 1px solid rgba(34,197,94,0.25);  color: #22c55e; }
 
+/* ── Pre-toss notice card (NEW — replaces ugly inline note) ── */
+.pretoss-notice {
+    background: linear-gradient(135deg,
+        rgba(234,179,8,0.08) 0%,
+        rgba(13,17,23,0.85) 100%);
+    border: 1px solid rgba(234,179,8,0.25);
+    border-left: 4px solid #eab308;
+    border-radius: 14px;
+    padding: 1rem 1.2rem;
+    margin: 1.2rem 0 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+}
+.pretoss-icon { font-size: 1.3rem; flex-shrink: 0; }
+.pretoss-text {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.85rem;
+    color: rgba(255,255,255,0.75);
+    line-height: 1.5;
+}
+.pretoss-text b {
+    color: #eab308;
+    font-weight: 700;
+}
+
 /* ── Expander ── */
 [data-testid="stExpander"] {
     background: rgba(255,255,255,0.02) !important;
@@ -809,6 +897,7 @@ st.markdown("""
     .hero-title  { font-size: 2rem; }
     .pred-winner { font-size: 1.8rem; }
     .match-vs-card { padding: 1.5rem 1rem; }
+    .team-name-big { font-size: 1.4rem; }
 }
 </style>
 
@@ -1118,19 +1207,23 @@ if go:
     # UI RENDERING
     # ═══════════════════════════════════════════════════════
 
-    # ── Match Card ────────────────────────────────────────
+    # ── Match Card (NEW: stacks on mobile, horizontal on desktop) ──
     st.markdown(
         '<div class="fancy-divider"><span>MATCH</span></div>',
         unsafe_allow_html=True,
     )
     match_html = (
         f'<div class="match-vs-card">'
-        f'<div style="display:flex;align-items:center;justify-content:center;gap:1.5rem;flex-wrap:wrap;">'
-        f'<div><div class="team-name-big">{team1}</div></div>'
-        f'<div class="vs-badge">VS</div>'
-        f'<div><div class="team-name-big">{team2}</div></div>'
+        f'<div class="match-teams-row">'
+        f'<div class="team-block">'
+        f'<div class="team-name-big">{team1}</div>'
         f'</div>'
-        f'<div style="margin-top:1rem;">'
+        f'<div class="vs-circle">VS</div>'
+        f'<div class="team-block">'
+        f'<div class="team-name-big">{team2}</div>'
+        f'</div>'
+        f'</div>'
+        f'<div>'
         f'<span class="venue-tag">📍 {match_info.get("venue", "N/A")}</span>'
         f'</div>'
         f'</div>'
@@ -1154,7 +1247,6 @@ if go:
         '<span class="attr-yes">YES</span>' if ground["spin_friendly"]
         else '<span class="attr-no">NO</span>'
     )
-    # ── New: clearer toss-strategy label ─────────────────
     toss_strategy_val = (
         '<span class="attr-yes">⚡ CHASE</span>' if ground["chase_friendly"]
         else '<span class="attr-no">🛡️ SET TARGET</span>'
@@ -1463,12 +1555,15 @@ if go:
             )
             st.markdown(tile_html, unsafe_allow_html=True)
 
-    # ── Footer banners ────────────────────────────────────
+    # ── Pre-toss notice (REDESIGNED — clean styled card) ──
     if not toss_done:
         st.markdown(
-            '<div class="banner banner-warn" style="margin-top:1.2rem;">'
-            '⚠️ Pre-toss estimate — click <b>PREDICT NOW</b> again after '
-            'the toss for an updated prediction with toss data'
+            '<div class="pretoss-notice">'
+            '<div class="pretoss-icon">⚠️</div>'
+            '<div class="pretoss-text">'
+            '<b>Pre-toss estimate</b> — based on historical data only. '
+            'Click <b>PREDICT NOW</b> again after the toss for a more accurate prediction.'
+            '</div>'
             '</div>',
             unsafe_allow_html=True,
         )
