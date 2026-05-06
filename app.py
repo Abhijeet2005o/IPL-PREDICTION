@@ -13,7 +13,6 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
-# ── Fixed import — no circular reference ──────────────────
 from scraper import espncricinfo_scraper
 from data.ground_types import get_ground_info
 
@@ -37,13 +36,12 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────
-# FULL CSS DESIGN SYSTEM
+# CSS
 # ─────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;500;600;700&family=Rajdhani:wght@400;500;600;700&display=swap');
 
-/* ── Reset & Base ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 .stApp {
@@ -51,7 +49,6 @@ st.markdown("""
     min-height: 100vh;
 }
 
-/* Hide streamlit defaults */
 #MainMenu, footer, header { visibility: hidden; }
 .block-container { padding: 0 1rem 2rem 1rem !important; max-width: 1400px !important; }
 [data-testid="stSidebar"] {
@@ -59,12 +56,10 @@ st.markdown("""
     border-right: 1px solid #1e2a3a !important;
 }
 
-/* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: #0d1117; }
 ::-webkit-scrollbar-thumb { background: #ff6b35; border-radius: 3px; }
 
-/* ── Animated Background Grid ── */
 .bg-grid {
     position: fixed;
     top: 0; left: 0;
@@ -82,7 +77,6 @@ st.markdown("""
     100% { transform: translateY(50px); }
 }
 
-/* ── Hero Header ── */
 .hero {
     position: relative;
     text-align: center;
@@ -134,7 +128,6 @@ st.markdown("""
     to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Live Badge ── */
 .live-pill {
     display: inline-flex;
     align-items: center;
@@ -165,7 +158,6 @@ st.markdown("""
     to   { opacity: 1; }
 }
 
-/* ── Glass Cards ── */
 .glass-card {
     background: rgba(255,255,255,0.03);
     backdrop-filter: blur(20px);
@@ -191,7 +183,6 @@ st.markdown("""
     box-shadow: 0 20px 40px rgba(0,0,0,0.4);
 }
 
-/* ── Section Headers ── */
 .sec-header {
     font-family: 'Orbitron', monospace;
     font-size: 0.75rem;
@@ -210,9 +201,7 @@ st.markdown("""
     background: linear-gradient(90deg, rgba(255,107,53,0.3), transparent);
 }
 
-/* ═════════════════════════════════════════════════════════
-   VS MATCH CARD — REDESIGNED
-   ═════════════════════════════════════════════════════════ */
+/* ── VS Match Card ── */
 .match-vs-card {
     background: linear-gradient(135deg,
         rgba(255,107,53,0.08) 0%,
@@ -235,32 +224,19 @@ st.markdown("""
     background: radial-gradient(circle, rgba(255,107,53,0.08) 0%, transparent 70%);
     pointer-events: none;
 }
-
-/* Layout — flex stacks vertically on mobile, horizontal on desktop */
 .match-teams-row {
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 1.5rem;
-    flex-direction: column;       /* MOBILE: stack vertically */
+    flex-direction: column;
     position: relative;
     z-index: 1;
 }
-
-/* Desktop: side-by-side */
 @media (min-width: 768px) {
-    .match-teams-row {
-        flex-direction: row;       /* DESKTOP: horizontal */
-        gap: 2rem;
-    }
+    .match-teams-row { flex-direction: row; gap: 2rem; }
 }
-
-.team-block {
-    flex: 1;
-    text-align: center;
-    min-width: 0;
-}
-
+.team-block { flex: 1; text-align: center; min-width: 0; }
 .team-name-big {
     font-family: 'Orbitron', monospace;
     font-size: clamp(1.4rem, 4vw, 2.2rem);
@@ -270,12 +246,9 @@ st.markdown("""
     line-height: 1.2;
     word-break: break-word;
 }
-
-/* VS Badge — circular, glowing, always centered */
 .vs-circle {
     flex-shrink: 0;
-    width: 70px;
-    height: 70px;
+    width: 70px; height: 70px;
     border-radius: 50%;
     background: linear-gradient(135deg, #ff6b35 0%, #ff4500 100%);
     display: flex;
@@ -286,28 +259,18 @@ st.markdown("""
     font-weight: 900;
     color: #ffffff;
     text-shadow: 0 2px 8px rgba(0,0,0,0.4);
-    box-shadow:
-        0 0 30px rgba(255,107,53,0.4),
-        0 8px 20px rgba(0,0,0,0.3),
-        inset 0 -3px 10px rgba(0,0,0,0.2);
+    box-shadow: 0 0 30px rgba(255,107,53,0.4), 0 8px 20px rgba(0,0,0,0.3),
+                inset 0 -3px 10px rgba(0,0,0,0.2);
     border: 3px solid rgba(255,255,255,0.15);
-    position: relative;
     animation: pulseVs 2.5s ease-in-out infinite;
 }
 @keyframes pulseVs {
     0%, 100% { transform: scale(1); box-shadow: 0 0 30px rgba(255,107,53,0.4), 0 8px 20px rgba(0,0,0,0.3); }
-    50%      { transform: scale(1.05); box-shadow: 0 0 45px rgba(255,107,53,0.6), 0 8px 20px rgba(0,0,0,0.3); }
+    50%       { transform: scale(1.05); box-shadow: 0 0 45px rgba(255,107,53,0.6), 0 8px 20px rgba(0,0,0,0.3); }
 }
-
 @media (min-width: 768px) {
-    .vs-circle {
-        width: 80px;
-        height: 80px;
-        font-size: 1.5rem;
-    }
+    .vs-circle { width: 80px; height: 80px; font-size: 1.5rem; }
 }
-
-/* Venue tag below */
 .venue-tag {
     display: inline-flex;
     align-items: center;
@@ -324,13 +287,9 @@ st.markdown("""
     z-index: 1;
 }
 
-/* ═════════════════════════════════════════════════════════
-   GROUND TYPE / PITCH REPORT CARD
-   ═════════════════════════════════════════════════════════ */
+/* ── Ground Card ── */
 .ground-card {
-    background: linear-gradient(135deg,
-        rgba(255,255,255,0.04) 0%,
-        rgba(13,17,23,0.85) 100%);
+    background: linear-gradient(135deg, rgba(255,255,255,0.04) 0%, rgba(13,17,23,0.85) 100%);
     border: 1px solid rgba(255,255,255,0.08);
     border-radius: 20px;
     padding: 1.6rem 1.5rem;
@@ -345,17 +304,8 @@ st.markdown("""
     width: 4px; height: 100%;
     background: var(--accent, #ff6b35);
 }
-
-.ground-header {
-    display: flex;
-    align-items: center;
-    gap: 0.9rem;
-    margin-bottom: 1.2rem;
-}
-.ground-icon-big {
-    font-size: 2.4rem;
-    flex-shrink: 0;
-}
+.ground-header { display: flex; align-items: center; gap: 0.9rem; margin-bottom: 1.2rem; }
+.ground-icon-big { font-size: 2.4rem; flex-shrink: 0; }
 .ground-info-block { flex: 1; min-width: 0; }
 .ground-type-name {
     font-family: 'Orbitron', monospace;
@@ -370,7 +320,6 @@ st.markdown("""
     color: rgba(255,255,255,0.5);
     margin-top: 0.2rem;
 }
-
 .ground-desc {
     font-family: 'Inter', sans-serif;
     font-size: 0.82rem;
@@ -383,7 +332,6 @@ st.markdown("""
     margin-bottom: 1rem;
     font-style: italic;
 }
-
 .ground-attrs-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -414,17 +362,15 @@ st.markdown("""
     color: #ffffff;
     margin-top: 0.1rem;
 }
-
 .attr-yes { color: #22c55e !important; }
 .attr-no  { color: #ef4444 !important; }
-
 @media (max-width: 600px) {
     .ground-icon-big { font-size: 2rem; }
     .ground-type-name { font-size: 1rem; }
     .ground-attrs-grid { grid-template-columns: 1fr 1fr; }
 }
 
-/* ── Prediction Hero Card ── */
+/* ── Prediction Hero ── */
 .pred-hero {
     background: linear-gradient(135deg,
         rgba(255,107,53,0.15) 0%,
@@ -437,9 +383,7 @@ st.markdown("""
     position: relative;
     overflow: hidden;
     margin: 1.5rem 0;
-    box-shadow:
-        0 0 60px rgba(255,107,53,0.1),
-        inset 0 0 60px rgba(0,0,0,0.3);
+    box-shadow: 0 0 60px rgba(255,107,53,0.1), inset 0 0 60px rgba(0,0,0,0.3);
 }
 .pred-hero::before {
     content: '';
@@ -458,11 +402,7 @@ st.markdown("""
     text-transform: uppercase;
     margin-bottom: 0.5rem;
 }
-.pred-trophy {
-    font-size: 3.5rem;
-    margin-bottom: 0.5rem;
-    animation: bounce 2s infinite;
-}
+.pred-trophy { font-size: 3.5rem; margin-bottom: 0.5rem; animation: bounce 2s infinite; }
 @keyframes bounce {
     0%, 100% { transform: translateY(0); }
     50%       { transform: translateY(-8px); }
@@ -505,11 +445,7 @@ st.markdown("""
     border-radius: 16px;
     border: 1px solid rgba(255,255,255,0.06);
 }
-.prob-labels {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 0.6rem;
-}
+.prob-labels { display: flex; justify-content: space-between; margin-bottom: 0.6rem; }
 .prob-team {
     font-family: 'Rajdhani', sans-serif;
     font-size: 0.85rem;
@@ -572,13 +508,9 @@ st.markdown("""
     margin-top: 0.3rem;
 }
 
-/* ═════════════════════════════════════════════════════════
-   TOSS CARD — vertical mobile-friendly layout
-   ═════════════════════════════════════════════════════════ */
+/* ── Toss Card ── */
 .toss-card {
-    background: linear-gradient(135deg,
-        rgba(255,215,0,0.06) 0%,
-        rgba(13,17,23,0.85) 100%);
+    background: linear-gradient(135deg, rgba(255,215,0,0.06) 0%, rgba(13,17,23,0.85) 100%);
     border: 1px solid rgba(255,215,0,0.18);
     border-radius: 20px;
     padding: 1.8rem 1.5rem;
@@ -594,13 +526,7 @@ st.markdown("""
     background: radial-gradient(circle, rgba(255,215,0,0.08) 0%, transparent 70%);
     pointer-events: none;
 }
-
-.toss-header {
-    display: flex;
-    align-items: center;
-    gap: 0.9rem;
-    margin-bottom: 1.2rem;
-}
+.toss-header { display: flex; align-items: center; gap: 0.9rem; margin-bottom: 1.2rem; }
 .toss-coin {
     font-size: 2.2rem;
     animation: spin 3s ease-in-out infinite;
@@ -624,9 +550,7 @@ st.markdown("""
     font-size: 0.78rem;
     color: rgba(255,255,255,0.5);
     margin-top: 0.2rem;
-    letter-spacing: 0.02em;
 }
-
 .toss-decision-row {
     display: flex;
     align-items: center;
@@ -638,18 +562,10 @@ st.markdown("""
     margin-bottom: 0.6rem;
 }
 .toss-decision-icon { font-size: 1.1rem; }
-.toss-decision-text {
-    font-family: 'Inter', sans-serif;
-    font-size: 0.82rem;
-    color: rgba(255,255,255,0.6);
-}
-.toss-decision-text b {
-    font-weight: 700;
-    margin-left: 0.2rem;
-}
+.toss-decision-text { font-family: 'Inter', sans-serif; font-size: 0.82rem; color: rgba(255,255,255,0.6); }
+.toss-decision-text b { font-weight: 700; margin-left: 0.2rem; }
 .bat-text  { color: #22c55e !important; }
 .bowl-text { color: #60a5fa !important; }
-
 .toss-chasing-row {
     display: flex;
     align-items: center;
@@ -660,41 +576,19 @@ st.markdown("""
     border-radius: 12px;
 }
 .toss-chasing-icon { font-size: 1.1rem; }
-.toss-chasing-text {
-    font-family: 'Inter', sans-serif;
-    font-size: 0.82rem;
-    color: rgba(255,255,255,0.6);
-}
-.toss-chasing-team {
-    font-family: 'Rajdhani', sans-serif;
-    font-weight: 700;
-    color: #ff6b35;
-    margin-left: 0.2rem;
-}
-
+.toss-chasing-text { font-family: 'Inter', sans-serif; font-size: 0.82rem; color: rgba(255,255,255,0.6); }
+.toss-chasing-team { font-family: 'Rajdhani', sans-serif; font-weight: 700; color: #ff6b35; margin-left: 0.2rem; }
 @media (max-width: 600px) {
     .toss-coin { font-size: 1.8rem; }
     .toss-winner-name { font-size: 1rem; }
-    .toss-decision-row, .toss-chasing-row { padding: 0.6rem 0.75rem; }
-    .toss-decision-text, .toss-chasing-text { font-size: 0.78rem; }
 }
 
-/* ── H2H Display ── */
-.h2h-bar    { display: flex; height: 8px; border-radius: 8px; overflow: hidden; margin: 0.8rem 0; background: rgba(255,255,255,0.05); }
-.h2h-t1     { background: linear-gradient(90deg, #ff6b35, #ff8c5a); }
-.h2h-t2     { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
-.h2h-label  {
-    font-family: 'Orbitron', monospace;
-    font-size: 1.8rem;
-    font-weight: 900;
-    color: #ffffff;
-}
-.h2h-team   {
-    font-family: 'Inter', sans-serif;
-    font-size: 0.75rem;
-    color: rgba(255,255,255,0.5);
-    margin-top: 0.2rem;
-}
+/* ── H2H ── */
+.h2h-bar   { display: flex; height: 8px; border-radius: 8px; overflow: hidden; margin: 0.8rem 0; background: rgba(255,255,255,0.05); }
+.h2h-t1    { background: linear-gradient(90deg, #ff6b35, #ff8c5a); }
+.h2h-t2    { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+.h2h-label { font-family: 'Orbitron', monospace; font-size: 1.8rem; font-weight: 900; color: #ffffff; }
+.h2h-team  { font-family: 'Inter', sans-serif; font-size: 0.75rem; color: rgba(255,255,255,0.5); margin-top: 0.2rem; }
 
 /* ── Player Chips ── */
 .player-grid { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.8rem; }
@@ -724,7 +618,7 @@ st.markdown("""
     margin-bottom: 0.5rem;
 }
 
-/* ── Form Section ── */
+/* ── Form ── */
 .form-row {
     display: flex;
     align-items: center;
@@ -737,7 +631,7 @@ st.markdown("""
 .form-score { font-family: 'Orbitron', monospace; font-size: 1.1rem; font-weight: 700; color: #ff6b35; }
 .form-label { font-family: 'Inter', sans-serif; font-size: 0.7rem; color: rgba(255,255,255,0.3); }
 
-/* ── CTA Button ── */
+/* ── Button ── */
 .stButton > button {
     background: linear-gradient(135deg, #ff6b35 0%, #ff4500 100%) !important;
     color: white !important;
@@ -756,7 +650,6 @@ st.markdown("""
     transform: translateY(-2px) !important;
     box-shadow: 0 12px 35px rgba(255,107,53,0.5) !important;
 }
-.stButton > button:active { transform: translateY(0) !important; }
 
 /* ── Sidebar ── */
 [data-testid="stSidebar"] .block-container { padding: 1.5rem 1rem !important; }
@@ -797,7 +690,7 @@ st.markdown("""
     box-shadow: 0 0 0 2px rgba(255,107,53,0.1) !important;
 }
 
-/* ── Inline Banners ── */
+/* ── Banners ── */
 .banner {
     padding: 0.8rem 1.2rem;
     border-radius: 12px;
@@ -813,11 +706,9 @@ st.markdown("""
 .banner-info { background: rgba(96,165,250,0.1); border: 1px solid rgba(96,165,250,0.25); color: #60a5fa; }
 .banner-ok   { background: rgba(34,197,94,0.1);  border: 1px solid rgba(34,197,94,0.25);  color: #22c55e; }
 
-/* ── Pre-toss notice card (NEW — replaces ugly inline note) ── */
+/* ── Pre-toss notice ── */
 .pretoss-notice {
-    background: linear-gradient(135deg,
-        rgba(234,179,8,0.08) 0%,
-        rgba(13,17,23,0.85) 100%);
+    background: linear-gradient(135deg, rgba(234,179,8,0.08) 0%, rgba(13,17,23,0.85) 100%);
     border: 1px solid rgba(234,179,8,0.25);
     border-left: 4px solid #eab308;
     border-radius: 14px;
@@ -834,9 +725,23 @@ st.markdown("""
     color: rgba(255,255,255,0.75);
     line-height: 1.5;
 }
-.pretoss-text b {
-    color: #eab308;
-    font-weight: 700;
+.pretoss-text b { color: #eab308; font-weight: 700; }
+
+/* ── Toss Override Card ── */
+.toss-override-card {
+    background: linear-gradient(135deg, rgba(96,165,250,0.06) 0%, rgba(13,17,23,0.85) 100%);
+    border: 1px solid rgba(96,165,250,0.2);
+    border-radius: 16px;
+    padding: 1rem 1.2rem;
+    margin-top: 0.8rem;
+}
+.toss-override-title {
+    font-family: 'Orbitron', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.2em;
+    color: #60a5fa;
+    text-transform: uppercase;
+    margin-bottom: 0.8rem;
 }
 
 /* ── Expander ── */
@@ -872,7 +777,7 @@ st.markdown("""
     color: rgba(255,107,53,0.5);
 }
 
-/* ── Metric overrides ── */
+/* ── Metrics ── */
 [data-testid="stMetric"] {
     background: rgba(255,255,255,0.03) !important;
     border: 1px solid rgba(255,255,255,0.07) !important;
@@ -892,7 +797,6 @@ st.markdown("""
     color: #ffffff !important;
 }
 
-/* ── Responsive ── */
 @media (max-width: 768px) {
     .hero-title  { font-size: 2rem; }
     .pred-winner { font-size: 1.8rem; }
@@ -906,7 +810,7 @@ st.markdown("""
 
 
 # ─────────────────────────────────────────────────────────
-# LOAD MODELS + DATA  (cached — runs once)
+# LOAD MODELS + DATA
 # ─────────────────────────────────────────────────────────
 @st.cache_resource
 def load_everything():
@@ -1051,6 +955,19 @@ with st.sidebar:
     manual_match_id  = st.text_input("Match ID",  value="", placeholder="e.g. 1529286")
     manual_series_id = st.text_input("Series ID", value="", placeholder="default: 1510719")
 
+    st.markdown('<div class="sidebar-section">Manual Toss Override</div>', unsafe_allow_html=True)
+    st.caption("Use this if toss is not auto-detected.")
+    manual_toss_winner   = st.selectbox(
+        "Toss Winner",
+        ["Auto-detect", "Team 1", "Team 2"],
+        index=0,
+    )
+    manual_toss_decision = st.selectbox(
+        "Toss Decision",
+        ["Auto-detect", "bat", "field"],
+        index=0,
+    )
+
     st.markdown('<div class="sidebar-section">Playing XI (optional)</div>', unsafe_allow_html=True)
     st.caption("Comma-separated. Overrides auto-detected XI.")
     manual_team1_xi = st.text_area("Team 1 XI", value="", placeholder="Player1, Player2 ...", height=80)
@@ -1095,7 +1012,7 @@ with btn_col:
 if go:
     today_ts = pd.Timestamp(datetime.today().date())
 
-    # ── Series ID override ────────────────────────────────
+    # Series ID override
     if manual_series_id.strip():
         espncricinfo_scraper.IPL_SERIES_ID = manual_series_id.strip()
         st.markdown(
@@ -1130,7 +1047,7 @@ if go:
     if match_id is None:
         st.markdown(
             '<div class="banner banner-err">'
-            '❌ No IPL match found today — paste a Match ID in the sidebar to continue'
+            '❌ No IPL match found today — paste a Match ID in the sidebar'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -1148,8 +1065,48 @@ if go:
     with st.spinner("📡  Fetching match data…"):
         match_info = scrape_match(match_id)
 
+    # ── Step 3: Apply manual toss override ───────────────
+    toss_overridden = False
+    if (manual_toss_winner != "Auto-detect"
+            and manual_toss_decision != "Auto-detect"
+            and match_info
+            and not match_info.get("error")):
+
+        team1_raw = match_info.get("team1", "")
+        team2_raw = match_info.get("team2", "")
+        tw = team1_raw if manual_toss_winner == "Team 1" else team2_raw
+        td = manual_toss_decision
+
+        chasing_team = (
+            (team2_raw if tw == team1_raw else team1_raw)
+            if td == "bat" else tw
+        )
+
+        match_info["toss_done"]     = True
+        match_info["toss_winner"]   = tw
+        match_info["toss_decision"] = td
+        match_info["chasing_team"]  = chasing_team
+        toss_overridden             = True
+
+        st.markdown(
+            f'<div class="banner banner-ok">'
+            f'🪙 Toss manually set — <b>{tw}</b> elected to <b>{td}</b>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Debug expander ────────────────────────────────────
     with st.expander("🐛  Debug — raw scraper output"):
         st.json(match_info or {})
+        st.markdown("**Toss status breakdown:**")
+        st.write({
+            "toss_done":      match_info.get("toss_done") if match_info else None,
+            "toss_winner":    match_info.get("toss_winner") if match_info else None,
+            "toss_decision":  match_info.get("toss_decision") if match_info else None,
+            "chasing_team":   match_info.get("chasing_team") if match_info else None,
+            "source":         match_info.get("source") if match_info else None,
+            "toss_overridden": toss_overridden,
+        })
 
     if not match_info or match_info.get("error") or not match_info.get("team1"):
         err = (match_info or {}).get("error", "Unknown error")
@@ -1169,7 +1126,7 @@ if go:
     if xi2:
         match_info["team2_xi"] = xi2
 
-    # ── Step 3: Build features ────────────────────────────
+    # ── Step 4: Build features + run models ───────────────
     with st.spinner("🧠  Running AI models…"):
         feats = build_feature_vector(
             match_info, player_lookup, matches,
@@ -1207,12 +1164,12 @@ if go:
     # UI RENDERING
     # ═══════════════════════════════════════════════════════
 
-    # ── Match Card (NEW: stacks on mobile, horizontal on desktop) ──
+    # ── Match Card ────────────────────────────────────────
     st.markdown(
         '<div class="fancy-divider"><span>MATCH</span></div>',
         unsafe_allow_html=True,
     )
-    match_html = (
+    st.markdown(
         f'<div class="match-vs-card">'
         f'<div class="match-teams-row">'
         f'<div class="team-block">'
@@ -1226,13 +1183,13 @@ if go:
         f'<div>'
         f'<span class="venue-tag">📍 {match_info.get("venue", "N/A")}</span>'
         f'</div>'
-        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
     )
-    st.markdown(match_html, unsafe_allow_html=True)
 
-    # ── Pitch Report / Ground Type Card ───────────────────
+    # ── Pitch Report ──────────────────────────────────────
     venue_name = match_info.get("venue", "")
-    ground = get_ground_info(venue_name)
+    ground     = get_ground_info(venue_name)
 
     st.markdown(
         '<div class="fancy-divider"><span>PITCH REPORT</span></div>',
@@ -1252,7 +1209,7 @@ if go:
         else '<span class="attr-no">🛡️ SET TARGET</span>'
     )
 
-    ground_html = (
+    st.markdown(
         f'<div class="ground-card" style="--accent:{ground["color"]};">'
         f'<div class="ground-header">'
         f'<div class="ground-icon-big">{ground["icon"]}</div>'
@@ -1263,54 +1220,30 @@ if go:
         f'</div>'
         f'<div class="ground-desc">💡 {ground["description"]}</div>'
         f'<div class="ground-attrs-grid">'
-        f'<div class="ground-attr">'
-        f'<div class="ground-attr-icon">📊</div>'
-        f'<div class="ground-attr-content">'
-        f'<div class="ground-attr-label">Avg Score</div>'
-        f'<div class="ground-attr-value">{ground["avg_score"]}</div>'
+        f'<div class="ground-attr"><div class="ground-attr-icon">📊</div>'
+        f'<div class="ground-attr-content"><div class="ground-attr-label">Avg Score</div>'
+        f'<div class="ground-attr-value">{ground["avg_score"]}</div></div></div>'
+        f'<div class="ground-attr"><div class="ground-attr-icon">📏</div>'
+        f'<div class="ground-attr-content"><div class="ground-attr-label">Boundary</div>'
+        f'<div class="ground-attr-value">{ground["boundary_size"]}</div></div></div>'
+        f'<div class="ground-attr"><div class="ground-attr-icon">⚡</div>'
+        f'<div class="ground-attr-content"><div class="ground-attr-label">Pace</div>'
+        f'<div class="ground-attr-value">{pace_val}</div></div></div>'
+        f'<div class="ground-attr"><div class="ground-attr-icon">🌀</div>'
+        f'<div class="ground-attr-content"><div class="ground-attr-label">Spin</div>'
+        f'<div class="ground-attr-value">{spin_val}</div></div></div>'
+        f'<div class="ground-attr"><div class="ground-attr-icon">💧</div>'
+        f'<div class="ground-attr-content"><div class="ground-attr-label">Dew Factor</div>'
+        f'<div class="ground-attr-value">{ground["dew_factor"]}</div></div></div>'
+        f'<div class="ground-attr"><div class="ground-attr-icon">🎯</div>'
+        f'<div class="ground-attr-content"><div class="ground-attr-label">If Won Toss</div>'
+        f'<div class="ground-attr-value">{toss_strategy_val}</div></div></div>'
         f'</div>'
-        f'</div>'
-        f'<div class="ground-attr">'
-        f'<div class="ground-attr-icon">📏</div>'
-        f'<div class="ground-attr-content">'
-        f'<div class="ground-attr-label">Boundary</div>'
-        f'<div class="ground-attr-value">{ground["boundary_size"]}</div>'
-        f'</div>'
-        f'</div>'
-        f'<div class="ground-attr">'
-        f'<div class="ground-attr-icon">⚡</div>'
-        f'<div class="ground-attr-content">'
-        f'<div class="ground-attr-label">Pace</div>'
-        f'<div class="ground-attr-value">{pace_val}</div>'
-        f'</div>'
-        f'</div>'
-        f'<div class="ground-attr">'
-        f'<div class="ground-attr-icon">🌀</div>'
-        f'<div class="ground-attr-content">'
-        f'<div class="ground-attr-label">Spin</div>'
-        f'<div class="ground-attr-value">{spin_val}</div>'
-        f'</div>'
-        f'</div>'
-        f'<div class="ground-attr">'
-        f'<div class="ground-attr-icon">💧</div>'
-        f'<div class="ground-attr-content">'
-        f'<div class="ground-attr-label">Dew Factor</div>'
-        f'<div class="ground-attr-value">{ground["dew_factor"]}</div>'
-        f'</div>'
-        f'</div>'
-        f'<div class="ground-attr">'
-        f'<div class="ground-attr-icon">🎯</div>'
-        f'<div class="ground-attr-content">'
-        f'<div class="ground-attr-label">If Won Toss</div>'
-        f'<div class="ground-attr-value">{toss_strategy_val}</div>'
-        f'</div>'
-        f'</div>'
-        f'</div>'
-        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
     )
-    st.markdown(ground_html, unsafe_allow_html=True)
 
-    # ── Toss Card (vertical mobile-friendly layout) ───────
+    # ── Toss Card ─────────────────────────────────────────
     if toss_done:
         toss_winner   = match_info.get("toss_winner", "")
         toss_decision = match_info.get("toss_decision", "")
@@ -1336,13 +1269,22 @@ if go:
             f'</div>'
         ) if chasing else ""
 
+        override_badge = (
+            '<div style="margin-bottom:0.8rem;">'
+            '<span style="background:rgba(96,165,250,0.15);border:1px solid rgba(96,165,250,0.3);'
+            'color:#60a5fa;padding:0.2rem 0.8rem;border-radius:50px;'
+            'font-family:Orbitron,monospace;font-size:0.6rem;letter-spacing:0.1em;">'
+            '🔧 MANUALLY SET'
+            '</span></div>'
+        ) if toss_overridden else ""
+
         st.markdown(
             '<div class="fancy-divider"><span>TOSS</span></div>',
             unsafe_allow_html=True,
         )
-
-        toss_html = (
+        st.markdown(
             f'<div class="toss-card">'
+            f'{override_badge}'
             f'<div class="toss-header">'
             f'<div class="toss-coin">🪙</div>'
             f'<div class="toss-winner-block">'
@@ -1357,9 +1299,26 @@ if go:
             f'</div>'
             f'</div>'
             f'{chasing_html}'
-            f'</div>'
+            f'</div>',
+            unsafe_allow_html=True,
         )
-        st.markdown(toss_html, unsafe_allow_html=True)
+    else:
+        # Show toss override hint
+        st.markdown(
+            '<div class="fancy-divider"><span>TOSS</span></div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="pretoss-notice">'
+            '<div class="pretoss-icon">🪙</div>'
+            '<div class="pretoss-text">'
+            'Toss not yet detected. Once toss is done, click '
+            '<b>PREDICT NOW</b> again — or use the '
+            '<b>Manual Toss Override</b> in the sidebar.'
+            '</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
     # ── Head to Head ──────────────────────────────────────
     st.markdown(
@@ -1370,7 +1329,7 @@ if go:
     t1_pct = int(t1w / total * 100) if total else 50
     t2_pct = 100 - t1_pct
 
-    h2h_html = (
+    st.markdown(
         f'<div class="glass-card">'
         f'<div class="sec-header">⚔️ All-Time Record</div>'
         f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.8rem;">'
@@ -1379,7 +1338,8 @@ if go:
         f'<div class="h2h-team">{team1}</div>'
         f'</div>'
         f'<div style="text-align:center;">'
-        f'<div style="font-family:Orbitron,monospace;font-size:0.7rem;color:rgba(255,255,255,0.3);letter-spacing:0.15em;">'
+        f'<div style="font-family:Orbitron,monospace;font-size:0.7rem;'
+        f'color:rgba(255,255,255,0.3);letter-spacing:0.15em;">'
         f'{total} MATCHES'
         f'</div>'
         f'</div>'
@@ -1392,13 +1352,13 @@ if go:
         f'<div class="h2h-t1" style="width:{t1_pct}%;"></div>'
         f'<div class="h2h-t2" style="width:{t2_pct}%;"></div>'
         f'</div>'
-        f'<div style="display:flex;justify-content:space-between;font-family:Inter,sans-serif;font-size:0.7rem;color:rgba(255,255,255,0.3);margin-top:0.4rem;">'
-        f'<span>{t1_pct}%</span>'
-        f'<span>{t2_pct}%</span>'
+        f'<div style="display:flex;justify-content:space-between;font-family:Inter,sans-serif;'
+        f'font-size:0.7rem;color:rgba(255,255,255,0.3);margin-top:0.4rem;">'
+        f'<span>{t1_pct}%</span><span>{t2_pct}%</span>'
         f'</div>'
-        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
     )
-    st.markdown(h2h_html, unsafe_allow_html=True)
 
     # ── Recent Form ───────────────────────────────────────
     st.markdown(
@@ -1410,7 +1370,7 @@ if go:
 
     fc1, fc2 = st.columns(2)
     with fc1:
-        form_html_1 = (
+        st.markdown(
             f'<div class="glass-card">'
             f'<div class="sec-header">🔵 {team1}</div>'
             f'<div class="form-row">'
@@ -1420,11 +1380,11 @@ if go:
             f'</div>'
             f'<div class="form-score">{rs1:.0f}</div>'
             f'</div>'
-            f'</div>'
+            f'</div>',
+            unsafe_allow_html=True,
         )
-        st.markdown(form_html_1, unsafe_allow_html=True)
     with fc2:
-        form_html_2 = (
+        st.markdown(
             f'<div class="glass-card">'
             f'<div class="sec-header">🔴 {team2}</div>'
             f'<div class="form-row">'
@@ -1434,9 +1394,9 @@ if go:
             f'</div>'
             f'<div class="form-score">{rs2:.0f}</div>'
             f'</div>'
-            f'</div>'
+            f'</div>',
+            unsafe_allow_html=True,
         )
-        st.markdown(form_html_2, unsafe_allow_html=True)
 
     # ── Playing XI ────────────────────────────────────────
     xi_available = bool(
@@ -1453,25 +1413,25 @@ if go:
                 f'<span class="player-chip">🏏 {p}</span>'
                 for p in match_info.get("team1_xi", [])
             )
-            xi_html_1 = (
+            st.markdown(
                 f'<div class="glass-card">'
                 f'<div class="xi-team-label">{team1}</div>'
                 f'<div class="player-grid">{chips1}</div>'
-                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True,
             )
-            st.markdown(xi_html_1, unsafe_allow_html=True)
         with xc2:
             chips2 = "".join(
                 f'<span class="player-chip">🏏 {p}</span>'
                 for p in match_info.get("team2_xi", [])
             )
-            xi_html_2 = (
+            st.markdown(
                 f'<div class="glass-card">'
                 f'<div class="xi-team-label">{team2}</div>'
                 f'<div class="player-grid">{chips2}</div>'
-                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True,
             )
-            st.markdown(xi_html_2, unsafe_allow_html=True)
     elif toss_done:
         st.markdown(
             '<div class="banner banner-warn">'
@@ -1500,7 +1460,7 @@ if go:
         "⏳ PRE-TOSS · HISTORICAL ESTIMATE"
     )
 
-    pred_html = (
+    st.markdown(
         f'<div class="pred-hero">'
         f'<div class="pred-label">AI MATCH PREDICTION</div>'
         f'<span class="pred-type-badge {badge_class}">{badge_text}</span>'
@@ -1508,15 +1468,15 @@ if go:
         f'<div class="pred-label">PREDICTED WINNER</div>'
         f'<div class="pred-winner">{pred_winner}</div>'
         f'<div class="pred-conf">{win_prob:.1f}% confidence</div>'
-        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
     )
-    st.markdown(pred_html, unsafe_allow_html=True)
 
     # ── Win Probability Bar ───────────────────────────────
     p1 = win_prob  if pred_winner == team1 else lose_prob
     p2 = lose_prob if pred_winner == team1 else win_prob
 
-    prob_html = (
+    st.markdown(
         f'<div class="prob-container">'
         f'<div class="prob-labels">'
         f'<div>'
@@ -1532,9 +1492,9 @@ if go:
         f'<div class="prob-bar-t1" style="width:{p1:.1f}%;"></div>'
         f'<div class="prob-bar-t2" style="width:{p2:.1f}%;"></div>'
         f'</div>'
-        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
     )
-    st.markdown(prob_html, unsafe_allow_html=True)
 
     # ── Stat Tiles ────────────────────────────────────────
     sc1, sc2, sc3, sc4 = st.columns(4)
@@ -1546,23 +1506,24 @@ if go:
     ]
     for col, (icon, val, label) in zip([sc1, sc2, sc3, sc4], tiles):
         with col:
-            tile_html = (
+            st.markdown(
                 f'<div class="stat-card">'
                 f'<div class="stat-icon">{icon}</div>'
                 f'<div class="stat-val">{val}</div>'
                 f'<div class="stat-label">{label}</div>'
-                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True,
             )
-            st.markdown(tile_html, unsafe_allow_html=True)
 
-    # ── Pre-toss notice (REDESIGNED — clean styled card) ──
+    # ── Pre-toss notice ───────────────────────────────────
     if not toss_done:
         st.markdown(
             '<div class="pretoss-notice">'
             '<div class="pretoss-icon">⚠️</div>'
             '<div class="pretoss-text">'
             '<b>Pre-toss estimate</b> — based on historical data only. '
-            'Click <b>PREDICT NOW</b> again after the toss for a more accurate prediction.'
+            'Click <b>PREDICT NOW</b> again after the toss, or use the '
+            '<b>Manual Toss Override</b> in the sidebar for an immediate update.'
             '</div>'
             '</div>',
             unsafe_allow_html=True,
