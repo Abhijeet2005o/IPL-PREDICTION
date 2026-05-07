@@ -1,5 +1,8 @@
+<<<<<<< HEAD
 # app.py — UPDATED with H2H fix and better team name handling
 # Replace your existing app.py with this file
+=======
+>>>>>>> a69e43db306bc591a28f00397e8640840841f886
 
 import streamlit as st
 import pandas as pd
