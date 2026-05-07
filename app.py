@@ -21,53 +21,53 @@ get_todays_match_id = espncricinfo_scraper.get_todays_match_id
 
 # ─── Page Config ───
 st.set_page_config(
-    page_title="IPL Neural Predictor",
+    page_title="IPL Neural Predictor 3D",
     page_icon="🔮",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# ─── 3D Glassmorphism UI ───
+# ─── 3D UI CSS ───
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;500;700&display=swap');
 
-/* 3D Dark Background */
 .stApp {
-    background: radial-gradient(circle at 10% 20%, rgb(10, 20, 40) 0%, rgb(0, 5, 15) 90%);
+    background: radial-gradient(circle at 10% 20%, rgb(10, 25, 45) 0%, rgb(2, 5, 15) 90%);
     font-family: 'Rajdhani', sans-serif;
+    color: #e0e6ed;
 }
 
-/* 3D Floating Cards */
+/* 3D Glassmorphism Cards */
 .card-3d {
-    background: rgba(255, 255, 255, 0.03);
+    background: rgba(255, 255, 255, 0.04);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 20px;
     padding: 20px;
-    margin: 10px;
+    margin-bottom: 15px;
     box-shadow: 
-        0 10px 30px 0 rgba(0, 0, 0, 0.5),
-        inset 0 0 15px rgba(0, 255, 255, 0.05);
+        0 8px 32px 0 rgba(0, 0, 0, 0.5),
+        inset 0 0 20px rgba(0, 255, 255, 0.02);
     transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 .card-3d:hover {
-    transform: translateY(-5px);
+    transform: translateY(-5px) scale(1.01);
     box-shadow: 
-        0 15px 40px 0 rgba(0, 255, 255, 0.15),
-        inset 0 0 15px rgba(0, 255, 255, 0.1);
+        0 15px 45px 0 rgba(0, 255, 255, 0.15),
+        inset 0 0 25px rgba(0, 255, 255, 0.05);
     border-color: rgba(0, 255, 255, 0.3);
 }
 
 /* Neon Text */
 h1, h2, h3 {
     font-family: 'Orbitron', sans-serif;
-    text-shadow: 0 0 10px rgba(0, 255, 255, 0.4);
-    color: #fff;
+    text-shadow: 0 0 15px rgba(0, 255, 255, 0.4);
+    color: #ffffff;
 }
 
-/* Metrics */
+/* Metric Boxes */
 .metric-box {
     background: linear-gradient(145deg, #0d1624, #050a14);
     border: 1px solid #1f364d;
@@ -75,12 +75,13 @@ h1, h2, h3 {
     padding: 15px;
     text-align: center;
     box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+    height: 100%;
 }
 .metric-val {
     font-size: 2.2rem;
     font-weight: 700;
     color: #00ffcc;
-    text-shadow: 0 0 8px #00ffcc;
+    text-shadow: 0 0 10px #00ffcc;
 }
 .metric-label {
     font-size: 0.85rem;
@@ -89,7 +90,7 @@ h1, h2, h3 {
     text-transform: uppercase;
 }
 
-/* Button */
+/* Buttons */
 .stButton>button {
     background: linear-gradient(90deg, #00C9FF 0%, #92FE9D 100%);
     color: #000;
@@ -97,19 +98,22 @@ h1, h2, h3 {
     font-family: 'Orbitron', sans-serif;
     border: none;
     border-radius: 50px;
+    padding: 10px 25px;
     box-shadow: 0 0 15px rgba(0, 255, 255, 0.5);
+    transition: all 0.3s;
 }
 .stButton>button:hover {
-    box-shadow: 0 0 25px rgba(0, 255, 255, 0.8);
+    box-shadow: 0 0 30px rgba(0, 255, 255, 0.8);
+    transform: scale(1.05);
 }
 
 /* Sidebar */
 [data-testid="stSidebar"] {
-    background: rgba(5, 10, 20, 0.95);
-    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(5, 10, 20, 0.95) !important;
+    border-right: 1px solid rgba(255, 255, 255, 0.1) !important;
 }
 
-/* Hide default headers */
+/* Hide Streamlit Elements */
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 header {visibility: hidden;}
@@ -123,7 +127,7 @@ def load_everything():
         'winner': joblib.load('models/winner_model.pkl'),
         'score': joblib.load('models/score_model.pkl'),
         'second_innings': joblib.load('models/second_innings_model.pkl'),
-        # Using opener_model.pkl for PP score as discussed
+        # Re-using opener model for Powerplay Score
         'pp_score': joblib.load('models/opener_model.pkl') 
     }
     
@@ -135,10 +139,10 @@ def load_everything():
     with open('data/feature_cols.pkl', 'rb') as f:
         feature_cols = pickle.load(f)
         
-    # Load CSVs for stats
+    # Load Data for H2H and Stats
     m_raw = pd.read_csv('data/all_ipl_matches_data.csv')
     t_raw = pd.read_csv('data/all_teams_data.csv')
-    t_map = dict(zip(t_raw['team_id'], t_raw['team_name']))
+    t_map = dict(zip(t_raw['team_id'], t_raw['team_name'].str.strip()))
     
     m_raw['team1'] = m_raw['team1'].map(t_map).str.strip()
     m_raw['team2'] = m_raw['team2'].map(t_map).str.strip()
@@ -152,14 +156,36 @@ def load_everything():
     
     tsl = pd.read_csv('data/team_scores_long.csv')
     tsl['match_date'] = pd.to_datetime(tsl['match_date'])
+    if 'team' in tsl.columns:
+        tsl['team'] = tsl['team'].str.strip()
+        
+    pp_df = pd.read_csv('data/team_pp_eco.csv')
+    if 'team_name' in pp_df.columns:
+        pp_df['team_name'] = pp_df['team_name'].str.strip()
+    pp_eco = dict(zip(pp_df['team_name'], pp_df['avg_pp_economy']))
     
-    return models, encoders, feature_cols, matches, vsh, tsl
+    op_df = pd.read_csv('data/team_opener_lookup.csv')
+    if 'team_name' in op_df.columns:
+        op_df['team_name'] = op_df['team_name'].str.strip()
+    op_lkp = {
+        row['team_name']: {
+            'opener_avg_batting_avg': float(row['opener_avg_batting_avg']),
+            'opener_avg_strike_rate': float(row['opener_avg_strike_rate']),
+        }
+        for _, row in op_df.iterrows()
+    }
+    
+    return models, encoders, feature_cols, matches, vsh, tsl, pp_eco, op_lkp
 
-models, encoders, feature_cols, matches, vsh, tsl = load_everything()
+# ─── Initialize ───
+try:
+    models, encoders, feature_cols, matches, vsh, tsl, pp_eco, op_lkp = load_everything()
+except Exception as e:
+    st.error(f"❌ Failed to load models/data: {e}")
+    st.stop()
 
 # ─── Helpers ───
 def h2h_stats(team1, team2):
-    # Use the fixer from scraper
     t1 = espncricinfo_scraper._normalize_team_name(team1)
     t2 = espncricinfo_scraper._normalize_team_name(team2)
     
@@ -172,118 +198,117 @@ def h2h_stats(team1, team2):
     return t1w, t2w, len(h)
 
 def get_recent_avg(team, n=5):
+    team = espncricinfo_scraper._normalize_team_name(team)
     past = tsl[(tsl['team'] == team)].tail(n)
-    return past['first_innings_score'].mean() if len(past) > 0 else 167.0
+    return float(past['first_innings_score'].mean()) if len(past) > 0 else 167.0
 
-def align_features(feats, model):
-    expected = getattr(model, "feature_names_in_", [])
-    if not expected: return feats.fillna(0)
-    aligned = pd.DataFrame(index=feats.index)
-    for col in expected:
-        if col in feats.columns:
-            aligned[col] = feats[col]
-        else:
-            aligned[col] = 0.0
-    return aligned.fillna(0)
+def get_recent_high_rate(team, n=10):
+    team = espncricinfo_scraper._normalize_team_name(team)
+    threshold = tsl['first_innings_score'].quantile(0.75)
+    past = tsl[(tsl['team'] == team)].tail(n)
+    return float((past['first_innings_score'] >= threshold).mean()) if len(past) > 0 else 0.3
 
 # ─── Sidebar ───
 with st.sidebar:
-    st.markdown("### ⚙️ SETTINGS")
+    st.markdown("<h3 style='color:#00C9FF'>⚙️ Settings</h3>", unsafe_allow_html=True)
     manual_match_id = st.text_input("Match ID (e.g. 1529293)", "")
     
-    st.markdown("### 🪙 TOSS OVERRIDE")
-    toss_winner = st.selectbox("Toss Winner", ["Auto-detect", "Team 1", "Team 2"])
-    toss_decision = st.selectbox("Decision", ["Auto-detect", "Bat", "Field"])
-    
-    st.markdown("### 📝 XI OVERRIDE")
-    xi_input = st.text_area("Paste Team 1 XI (comma separated)", height=100)
+    st.markdown("---")
+    st.markdown("<h3 style='color:#00C9FF'>🪙 Toss Override</h3>", unsafe_allow_html=True)
+    toss_winner_override = st.selectbox("Toss Winner", ["Auto-detect", "Team 1", "Team 2"])
+    toss_decision_override = st.selectbox("Decision", ["Auto-detect", "Bat", "Field"])
 
 # ─── Main UI ───
-st.markdown("<h1 style='text-align:center;'>🔮 IPL NEURAL PREDICTOR</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align:center; margin-bottom: 5px;'>🔮 IPL NEURAL PREDICTOR</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center; color:#88a3bd; margin-bottom: 30px;'>Powered by XGBoost Ensemble • Live Data Integration • 3D Engine</p>", unsafe_allow_html=True)
 
 col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
 with col_btn2:
     predict_btn = st.button("🚀 INITIATE PREDICTION", use_container_width=True, type="primary")
 
 if predict_btn:
-    # 1. Get Match
     match_id_input = manual_match_id.strip()
     if match_id_input:
-        match_id = int(match_id_input)
+        try:
+            match_id = int(match_id_input)
+        except:
+            st.error("❌ Invalid Match ID")
+            st.stop()
     else:
         match_id = get_todays_match_id()
+        if not match_id:
+            st.error("❌ No match found. Please enter a Match ID.")
+            st.stop()
     
-    if not match_id:
-        st.error("❌ No match ID found. Please enter one in the sidebar.")
-        st.stop()
-    
-    # 2. Scrape
     with st.spinner("📡 Scraping Live Data..."):
-        match_info = scrape_match(match_id)
-    
-    if 'error' in match_info:
-        st.error(f"❌ Scraping Failed: {match_info['error']}")
-        st.stop()
-    
-    # Apply Overrides
-    if toss_winner != "Auto-detect" and toss_decision != "Auto-detect":
-        t1 = match_info['team1']
-        t2 = match_info['team2']
-        match_info['toss_winner'] = t1 if toss_winner == "Team 1" else t2
-        match_info['toss_decision'] = 'bat' if toss_decision == "Bat" else 'field'
-        match_info['toss_done'] = True
-        match_info['chasing_team'] = (t2 if match_info['toss_winner'] == t1 else t1) if match_info['toss_decision'] == 'bat' else match_info['toss_winner']
-
-    # 3. Build Features
-    with st.spinner("🧠 Running Neural Models..."):
-        # Note: We pass minimal data here as build_feature_vector does the heavy lifting
-        # You might need to adjust this call based on your exact helper signature
         try:
+            match_info = scrape_match(match_id)
+        except Exception as e:
+            st.error(f"❌ Scraping Error: {e}")
+            st.stop()
+
+    if not match_info or 'error' in match_info:
+        st.error(f"❌ Data fetch failed: {match_info.get('error', 'Unknown error')}")
+        st.stop()
+
+    # Apply Manual Overrides
+    if toss_winner_override != "Auto-detect" and toss_decision_override != "Auto-detect":
+        t1_raw = match_info.get("team1", "")
+        t2_raw = match_info.get("team2", "")
+        match_info["toss_winner"] = t1_raw if toss_winner_override == "Team 1" else t2_raw
+        match_info["toss_decision"] = 'bat' if toss_decision_override == "Bat" else 'field'
+        match_info["toss_done"] = True
+        match_info["chasing_team"] = (t2_raw if match_info["toss_winner"] == t1_raw else t1_raw) if match_info["toss_decision"] == 'bat' else match_info["toss_winner"]
+
+    # ─── Prediction Engine ───
+    with st.spinner("🧠 Running Neural Models..."):
+        try:
+            # Helper functions passed to build_feature_vector
+            def get_team_recent_avg_score(team, cd, n=5): return get_recent_avg(team, n)
+            def get_team_recent_high_score_rate(team, cd, n=10): return get_recent_high_rate(team, n)
+            
+            # Build Features
             feats = build_feature_vector(
-                match_info,
+                match_info, 
                 pd.read_csv('player_stats/player_lookup.csv'),
                 matches,
                 encoders['team'], encoders['venue'],
-                vsh,
-                dict(pd.read_csv('data/team_pp_eco.csv').values),
-                dict(pd.read_csv('data/team_opener_lookup.csv').values),
-                lambda t, d: 167.0, # Dummy for get_recent_avg
-                lambda d: 167.0, # Dummy for season
-                lambda d: 2026, # Dummy for year
-                lambda v, d: 167.0, # Dummy for venue
-                lambda t, d: 0.3, # Dummy for high score rate
+                vsh, pp_eco, op_lkp,
+                get_team_recent_avg_score, 
+                lambda d: 170, # Season Avg dummy
+                lambda d: 2026, # Year dummy
+                lambda v, d: 167, # Venue Avg dummy
+                get_team_recent_high_score_rate,
                 feature_cols
             )
+            feats = feats.fillna(0)
+            
+            # 1. 1st Innings Score
+            pred_1st = float(models['score'].predict(feats)[0])
+            
+            # 2. 2nd Innings Score (Needs target_score)
+            second_inn_feats = feats.copy()
+            second_inn_feats['target_score'] = pred_1st # Inject prediction
+            pred_2nd = float(models['second_innings'].predict(second_inn_feats)[0])
+            
+            # 3. Powerplay Score (Using opener model file)
+            pred_pp = float(models['pp_score'].predict(feats)[0])
+            
+            # 4. Winner
+            winner_probs = models['winner'].predict_proba(feats)[0]
+            winner_idx = np.argmax(winner_probs)
+            t1 = match_info['team1']
+            t2 = match_info['team2']
+            winner = t1 if winner_idx == 1 else t2
+            conf = float(winner_probs[winner_idx] * 100)
+
         except Exception as e:
-            st.error(f"⚠️ Feature Error: {e}")
+            st.error(f"🤖 Model Error: {e}")
+            import traceback
+            st.code(traceback.format_exc())
             st.stop()
 
-        feats = feats.fillna(0)
-        t1 = match_info['team1']
-        t2 = match_info['team2']
-        
-        # --- Predictions ---
-        # 1. Winner
-        w_feats = align_features(feats, models['winner'])
-        winner_probs = models['winner'].predict_proba(w_feats)[0]
-        winner_idx = np.argmax(winner_probs)
-        winner = t1 if winner_idx == 1 else t2
-        conf = float(winner_probs[winner_idx] * 100)
-        
-        # 2. 1st Innings
-        s_feats = align_features(feats, models['score'])
-        pred_1st = float(models['score'].predict(s_feats)[0])
-        
-        # 3. Powerplay (Using the "opener" model file)
-        p_feats = align_features(feats, models['pp_score'])
-        pred_pp = float(models['pp_score'].predict(p_feats)[0])
-        
-        # 4. 2nd Innings
-        si_feats = align_features(feats, models['second_innings'])
-        si_feats['target_score'] = pred_1st # INJECT 1ST INNINGS SCORE
-        pred_2nd = float(models['second_innings'].predict(si_feats)[0])
-
-    # 4. Display UI
+    # ─── 3D Results UI ───
     st.markdown("<br>", unsafe_allow_html=True)
     
     # Match Header
@@ -293,14 +318,14 @@ if predict_btn:
         <h1 style="font-size: 2.5rem; margin: 10px 0;">
             <span style="color:#00C9FF">{t1}</span> vs <span style="color:#92FE9D">{t2}</span>
         </h1>
-        <div style="color: #aaa;">📍 {match_info['venue']}</div>
+        <div style="color: #aaa; font-size: 1.1rem;">📍 {match_info['venue']}</div>
     </div>
     """, unsafe_allow_html=True)
     
     # Predictions Grid
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown(f"""<div class="metric-box"><div class="metric-val">{conf:.0f}%</div><div class="metric-label">Win Probability</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="metric-box"><div class="metric-val">{conf:.1f}%</div><div class="metric-label">Win Probability</div></div>""", unsafe_allow_html=True)
     with c2:
         st.markdown(f"""<div class="metric-box"><div class="metric-val">{int(pred_1st)}</div><div class="metric-label">1st Innings</div></div>""", unsafe_allow_html=True)
     with c3:
@@ -308,31 +333,34 @@ if predict_btn:
     with c4:
         st.markdown(f"""<div class="metric-box"><div class="metric-val">{int(pred_pp)}</div><div class="metric-label">Powerplay (0-6)</div></div>""", unsafe_allow_html=True)
         
-    # Winner Card
+    # Winner Badge
     st.markdown(f"""
-    <div class="card-3d" style="text-align:center; margin-top: 20px;">
+    <div class="card-3d" style="text-align:center; margin-top: 20px; border-color: rgba(0, 255, 255, 0.4);">
         <h3 style="color:#88a3bd;">PREDICTED WINNER</h3>
-        <h1 style="font-size: 3rem; color: #00ffcc; text-shadow: 0 0 20px #00ffcc;">{winner}</h1>
+        <h1 style="font-size: 3.5rem; color: #00ffcc; text-shadow: 0 0 25px #00ffcc; margin: 10px 0;">{winner}</h1>
     </div>
     """, unsafe_allow_html=True)
     
-    # Stats & H2H
-    t1w, t2w, total = h2h_stats(t1, t2)
+    # Stats Sections
     col_a, col_b = st.columns(2)
     with col_a:
-        st.markdown(f"""<div class="card-3d"><h3>⚔️ Head to Head</h3><p style="font-size:1.2rem">{t1} <b>{t1w}</b> - {t2w} <b>{t2}</b> (Total: {total})</p></div>""", unsafe_allow_html=True)
+        t1w, t2w, total = h2h_stats(t1, t2)
+        st.markdown(f"""<div class="card-3d"><h3 style="margin-bottom:5px;">⚔️ Head to Head</h3><p style="font-size:1.3rem">{t1} <b style="color:#00C9FF">{t1w}</b> - <b style="color:#92FE9D">{t2w}</b> {t2}</p><p style="color:#aaa; font-size:0.9rem">Total Matches: {total}</p></div>""", unsafe_allow_html=True)
     with col_b:
         r1 = get_recent_avg(t1)
         r2 = get_recent_avg(t2)
-        st.markdown(f"""<div class="card-3d"><h3>📊 Recent Form (Avg Score)</h3><p style="font-size:1.2rem">{t1}: <b>{r1:.0f}</b> | {t2}: <b>{r2:.0f}</b></p></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="card-3d"><h3 style="margin-bottom:5px;">📊 Recent Form (Avg)</h3><p style="font-size:1.3rem">{t1}: <b style="color:#00C9FF">{r1:.0f}</b> | {t2}: <b style="color:#92FE9D">{r2:.0f}</b></p></div>""", unsafe_allow_html=True)
 
     # Pitch Report
     ground = get_ground_info(match_info['venue'])
     st.markdown(f"""
     <div class="card-3d">
         <h3>🏟️ Pitch Report</h3>
-        <p><b>Type:</b> {ground.get('type', 'Balanced')}</p>
-        <p><b>Avg Score:</b> {ground.get('avg_score', 165)}</p>
-        <p><b>Strategy:</b> {'Chase' if ground.get('chase_friendly') else 'Set Target'}</p>
+        <div style="display:flex; justify-content:space-around;">
+            <div><b>Type:</b> {ground.get('type', 'Balanced')}</div>
+            <div><b>Avg Score:</b> {ground.get('avg_score', 165)}</div>
+            <div><b>Dew:</b> {ground.get('dew_factor', 'Medium')}</div>
+            <div><b>Strategy:</b> {'Chase' if ground.get('chase_friendly') else 'Set Target'}</div>
+        </div>
     </div>
     """, unsafe_allow_html=True)
