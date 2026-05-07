@@ -1,11 +1,12 @@
 import re
+import json
 from datetime import datetime
 
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
-# ── Try cricdata — gracefully skip if not installed ───────
+# ── Try cricdata ──────────────────────────────────────────
 try:
     from cricdata import CricinfoClient
     _CRICINFO_CLIENT = CricinfoClient()
@@ -25,7 +26,6 @@ HEADERS = {
     )
 }
 
-# ── Team aliases — covers both spellings of RCB ──────────
 TEAM_ALIASES = {
     "CSK":  "Chennai Super Kings",
     "DC":   "Delhi Capitals",
@@ -39,20 +39,16 @@ TEAM_ALIASES = {
     "KXIP": "Punjab Kings",
     "RR":   "Rajasthan Royals",
     "RCB":  "Royal Challengers Bangalore",
-    # Both spellings map to same canonical name
-    "ROYAL CHALLENGERS BENGALURU":  "Royal Challengers Bangalore",
-    "ROYAL CHALLENGERS BANGALORE":  "Royal Challengers Bangalore",
+    "SRH":  "Sunrisers Hyderabad",
     "RPS":  "Rising Pune Supergiant",
     "PWI":  "Pune Warriors",
 }
 
-# Canonical team name mapping — normalise scraped names → CSV names
+# Normalise scraped names → canonical CSV names
 _TEAM_NAME_CORRECTIONS = {
-    "Royal Challengers Bengaluru": "Royal Challengers Bangalore",
+    "Royal Challengers Bengaluru":  "Royal Challengers Bangalore",
+    "royal challengers bengaluru":  "Royal Challengers Bangalore",
     "Royal Challengers Bengaluru ": "Royal Challengers Bangalore",
-    "Lucknow Super Giants":        "Lucknow Super Giants",
-    "Punjab Kings":                "Punjab Kings",
-    "Delhi Capitals":              "Delhi Capitals",
 }
 
 
@@ -76,27 +72,69 @@ def _request_json(url, timeout=20):
 
 
 def _correct_team_name(name):
-    """Normalise team names to match CSV data."""
+    """Map variant spellings → canonical CSV name."""
     name = _clean_text(name)
-    # Direct lookup
-    if name in _TEAM_NAME_CORRECTIONS:
-        return _TEAM_NAME_CORRECTIONS[name]
-    # Case-insensitive lookup
-    name_lower = name.lower()
+    if not name:
+        return name
+    corrected = _TEAM_NAME_CORRECTIONS.get(name)
+    if corrected:
+        return corrected
+    corrected = _TEAM_NAME_CORRECTIONS.get(name.lower())
+    if corrected:
+        return corrected
+    # Case-insensitive scan
     for wrong, right in _TEAM_NAME_CORRECTIONS.items():
-        if wrong.lower() == name_lower:
+        if wrong.lower() == name.lower():
             return right
     return name
 
 
+def _deep_find_toss(obj, depth=0, max_depth=6):
+    """
+    Recursively walk any dict/list structure looking for toss-related keys.
+    Returns the first dict that looks like a toss object.
+    """
+    if depth > max_depth:
+        return None
+    if isinstance(obj, dict):
+        keys_lower = {k.lower(): k for k in obj}
+        # Direct toss key
+        for candidate in ["toss", "tossresults", "tossresult"]:
+            if candidate in keys_lower:
+                val = obj[keys_lower[candidate]]
+                if isinstance(val, dict) and val:
+                    return val
+        # Check if THIS dict looks like a toss object
+        has_winner = any(k.lower() in {
+            "tosswinner", "tosswinnerId", "winnerid",
+            "winner_team", "winner"
+        } for k in obj)
+        has_decision = any(k.lower() in {
+            "decision", "tossdecision", "elected", "choice"
+        } for k in obj)
+        if has_winner and has_decision:
+            return obj
+        # Recurse into values
+        for v in obj.values():
+            result = _deep_find_toss(v, depth + 1, max_depth)
+            if result:
+                return result
+    elif isinstance(obj, list):
+        for item in obj:
+            result = _deep_find_toss(item, depth + 1, max_depth)
+            if result:
+                return result
+    return None
+
+
 # ─────────────────────────────────────────────────────────
-# ESPN CRICINFO — cricdata client
+# ESPN CRICINFO
 # ─────────────────────────────────────────────────────────
 def _get_espn_live_match(match_id=None):
     if not _CRICDATA_AVAILABLE or _CRICINFO_CLIENT is None:
         return None
     try:
-        live = _CRICINFO_CLIENT.live_matches()
+        live       = _CRICINFO_CLIENT.live_matches()
         candidates = []
         for match in live:
             series      = match.get("series", {})
@@ -114,7 +152,7 @@ def _get_espn_live_match(match_id=None):
             if str(m.get("objectId", "")).strip() == match_id:
                 return m
     except Exception as e:
-        print(f"[DEBUG] _get_espn_live_match error: {e}")
+        print(f"[ESPN] _get_espn_live_match error: {e}")
     return None
 
 
@@ -127,9 +165,11 @@ def _extract_xi_from_scorecard(scorecard):
             .get("teamPlayers", [])
         )
         for entry in team_players:
-            team_name = _clean_text(entry.get("team", {}).get("longName", ""))
-            players   = entry.get("players", []) or []
-            names     = [
+            team_name = _correct_team_name(
+                _clean_text(entry.get("team", {}).get("longName", ""))
+            )
+            players = entry.get("players", []) or []
+            names   = [
                 _clean_text(p.get("player", {}).get("longName", ""))
                 for p in players
             ]
@@ -137,38 +177,30 @@ def _extract_xi_from_scorecard(scorecard):
             if team_name and names:
                 team_xi[team_name] = names[:11]
     except Exception as e:
-        print(f"[DEBUG] _extract_xi_from_scorecard error: {e}")
+        print(f"[ESPN] _extract_xi_from_scorecard error: {e}")
     return team_xi
 
 
-def _extract_toss_from_espn(info, team1, team2):
+def _extract_toss_from_espn_info(info, team1, team2):
     """
-    Extract toss from ESPN match info object.
-    Tries multiple known key structures.
-    Returns (toss_winner, toss_decision) or ("", None)
+    Extract toss from ESPN match_info.
+    Uses deep recursive search + multiple key variants.
+    Returns (toss_winner, toss_decision) or ("", None).
     """
-    print(f"[DEBUG] ESPN info keys: {list(info.keys()) if isinstance(info, dict) else type(info)}")
+    if not isinstance(info, dict):
+        print(f"[ESPN] match_info is not a dict: {type(info)}")
+        return "", None
 
-    toss = {}
+    # Print full structure for debugging
+    try:
+        print(f"[ESPN] match_info full dump:\n"
+              f"{json.dumps(info, indent=2, default=str)[:3000]}")
+    except Exception:
+        print(f"[ESPN] match_info keys: {list(info.keys())}")
 
-    # Try various ESPN key structures
-    if isinstance(info, dict):
-        toss = (
-            info.get("toss")
-            or info.get("tossResults")
-            or info.get("tossResult")
-            or {}
-        )
-        # Sometimes nested under 'match'
-        if not toss and "match" in info:
-            match_sub = info.get("match", {}) or {}
-            toss = (
-                match_sub.get("toss")
-                or match_sub.get("tossResults")
-                or {}
-            )
-
-    print(f"[DEBUG] ESPN toss object: {toss}")
+    # Deep search for toss object
+    toss = _deep_find_toss(info)
+    print(f"[ESPN] Deep-found toss object: {toss}")
 
     if not toss:
         return "", None
@@ -177,8 +209,10 @@ def _extract_toss_from_espn(info, team1, team2):
     tw_raw = _clean_text(
         toss.get("winner_team", "")
         or toss.get("tossWinner", "")
-        or toss.get("winner", "")
         or toss.get("winnerTeam", "")
+        or toss.get("winner", "")
+        or toss.get("tossWinnerId", "")
+        or toss.get("winnerId", "")
         or ""
     )
 
@@ -191,17 +225,21 @@ def _extract_toss_from_espn(info, team1, team2):
         or ""
     ).lower()
 
-    print(f"[DEBUG] ESPN tw_raw='{tw_raw}' td_raw='{td_raw}'")
+    print(f"[ESPN] tw_raw='{tw_raw}' td_raw='{td_raw}'")
 
     # Normalise decision
-    if td_raw in {"1", "batting", "bat"}:
+    if "bat" in td_raw:
         td = "bat"
-    elif td_raw in {"2", "bowling", "fielding", "field", "bowl"}:
+    elif "field" in td_raw or "bowl" in td_raw:
+        td = "field"
+    elif td_raw in {"1"}:
+        td = "bat"
+    elif td_raw in {"2"}:
         td = "field"
     else:
         td = None
 
-    # Match winner to team name
+    # Match winner string to known team
     tw = ""
     if tw_raw:
         for candidate in [team1, team2]:
@@ -209,39 +247,32 @@ def _extract_toss_from_espn(info, team1, team2):
                 tw = candidate
                 break
         if not tw:
-            # Try reverse
             for candidate in [team1, team2]:
                 if candidate and tw_raw.lower() in candidate.lower():
                     tw = candidate
                     break
 
-    print(f"[DEBUG] ESPN toss result: winner='{tw}' decision='{td}'")
+    print(f"[ESPN] Toss result: winner='{tw}' decision='{td}'")
     return tw, td
 
 
 # ─────────────────────────────────────────────────────────
-# CRICBUZZ — JSON API
+# CRICBUZZ JSON API
 # ─────────────────────────────────────────────────────────
 _CB_MATCH_INFO_URL = "https://www.cricbuzz.com/api/cricket-match/{match_id}/info"
 _CB_SCORECARD_URL  = "https://www.cricbuzz.com/api/cricket-match/{match_id}/scorecard"
+_CB_COMMENTARY_URL = "https://www.cricbuzz.com/api/cricket-match/{match_id}/commentary"
 
 
 def _cricbuzz_json_match_info(match_id):
-    """Fetch match info from Cricbuzz JSON API with robust toss extraction."""
+    """Cricbuzz JSON API — robust toss extraction."""
     try:
         data       = _request_json(_CB_MATCH_INFO_URL.format(match_id=match_id))
         match_info = data.get("matchInfo", {}) or {}
 
-        # DEBUG
-        toss_debug = (
-            match_info.get("tossResults")
-            or match_info.get("toss")
-            or match_info.get("tossResult")
-            or data.get("tossResults")
-            or {}
-        )
-        print(f"[DEBUG] CricbuzzJSON toss raw: {toss_debug}")
-        print(f"[DEBUG] CricbuzzJSON matchInfo keys: {list(match_info.keys())}")
+        print(f"[CB-JSON] matchInfo keys: {list(match_info.keys())}")
+        print(f"[CB-JSON] full matchInfo:\n"
+              f"{json.dumps(match_info, indent=2, default=str)[:2000]}")
 
         # Teams
         team1_obj = match_info.get("team1", {}) or {}
@@ -255,31 +286,31 @@ def _cricbuzz_json_match_info(match_id):
             venue_obj.get("ground", "") + ", " + venue_obj.get("city", "")
         ).strip(", ")
 
-        # Toss — try multiple key names
-        toss = (
-            match_info.get("tossResults")
-            or match_info.get("toss")
-            or match_info.get("tossResult")
-            or data.get("tossResults")
-            or {}
-        )
+        # Deep-search for toss
+        toss = _deep_find_toss(data)
+        print(f"[CB-JSON] Deep-found toss: {toss}")
 
-        toss_winner_id = str(
-            toss.get("tossWinnerId", "")
-            or toss.get("winnerId", "")
-            or toss.get("tossWinner", "")
-        ).strip()
+        toss_winner_id = ""
+        toss_decision  = ""
 
-        toss_decision = _clean_text(
-            toss.get("decision", "")
-            or toss.get("tossDecision", "")
-            or toss.get("elected", "")
-            or toss.get("choice", "")
-        ).lower()
+        if toss:
+            toss_winner_id = str(
+                toss.get("tossWinnerId", "")
+                or toss.get("winnerId", "")
+                or toss.get("tossWinner", "")
+            ).strip()
 
-        print(f"[DEBUG] CricbuzzJSON toss_winner_id='{toss_winner_id}' decision='{toss_decision}'")
+            toss_decision = _clean_text(
+                toss.get("decision", "")
+                or toss.get("tossDecision", "")
+                or toss.get("elected", "")
+                or toss.get("choice", "")
+            ).lower()
 
-        # Map ID → team name
+        print(f"[CB-JSON] toss_winner_id='{toss_winner_id}' "
+              f"toss_decision='{toss_decision}'")
+
+        # Map ID → name
         toss_winner = ""
         t1_id = str(team1_obj.get("id", "")).strip()
         t2_id = str(team2_obj.get("id", "")).strip()
@@ -290,10 +321,10 @@ def _cricbuzz_json_match_info(match_id):
             elif toss_winner_id == t2_id:
                 toss_winner = team2
             else:
-                if team1 and team1.lower() in toss_winner_id.lower():
-                    toss_winner = team1
-                elif team2 and team2.lower() in toss_winner_id.lower():
-                    toss_winner = team2
+                for candidate in [team1, team2]:
+                    if candidate and candidate.lower() in toss_winner_id.lower():
+                        toss_winner = candidate
+                        break
 
         # Normalise decision
         if "bat" in toss_decision:
@@ -307,12 +338,12 @@ def _cricbuzz_json_match_info(match_id):
 
         chasing_team = None
         if toss_done:
-            if toss_decision == "bat":
-                chasing_team = team2 if toss_winner == team1 else team1
-            else:
-                chasing_team = toss_winner
+            chasing_team = (
+                (team2 if toss_winner == team1 else team1)
+                if toss_decision == "bat" else toss_winner
+            )
 
-        print(f"[DEBUG] CricbuzzJSON final: toss_done={toss_done} "
+        print(f"[CB-JSON] Final: toss_done={toss_done} "
               f"winner='{toss_winner}' decision='{toss_decision}'")
 
         return {
@@ -326,17 +357,18 @@ def _cricbuzz_json_match_info(match_id):
             "raw":           data,
         }
     except Exception as e:
-        print(f"[DEBUG] _cricbuzz_json_match_info error: {e}")
+        print(f"[CB-JSON] Error: {e}")
         return None
 
 
 def _cricbuzz_json_xi(match_id):
-    """Fetch playing XI from Cricbuzz scorecard JSON API."""
+    """Playing XI from Cricbuzz scorecard JSON."""
     team1_xi, team2_xi = [], []
     try:
         data      = _request_json(_CB_SCORECARD_URL.format(match_id=match_id))
         scorecard = data.get("scoreCard", []) or []
         teams_seen = {}
+
         for inning in scorecard:
             bat_team = _correct_team_name(_clean_text(
                 inning.get("batTeamDetails", {}).get("batTeamName", "")
@@ -350,58 +382,53 @@ def _cricbuzz_json_xi(match_id):
             if bat_team and names and bat_team not in teams_seen:
                 teams_seen[bat_team] = names[:11]
 
-        team_list = list(teams_seen.keys())
-        if len(team_list) >= 1:
-            team1_xi = teams_seen[team_list[0]]
-        if len(team_list) >= 2:
-            team2_xi = teams_seen[team_list[1]]
+        keys = list(teams_seen.keys())
+        if len(keys) >= 1:
+            team1_xi = teams_seen[keys[0]]
+        if len(keys) >= 2:
+            team2_xi = teams_seen[keys[1]]
     except Exception as e:
-        print(f"[DEBUG] _cricbuzz_json_xi error: {e}")
+        print(f"[CB-JSON] _cricbuzz_json_xi error: {e}")
     return team1_xi, team2_xi
 
 
 # ─────────────────────────────────────────────────────────
-# CRICBUZZ HTML — targeted toss extraction
+# CRICBUZZ HTML — toss extraction
 # ─────────────────────────────────────────────────────────
 _TOSS_PATTERNS = [
-    # Pattern 1 — standard sentence
     re.compile(
         r"([A-Za-z\s]+?)\s+won\s+the\s+toss\s+and\s+(?:elected|chose)\s+to\s+(bat|bowl|field)",
         re.I,
     ),
-    # Pattern 2 — "Toss: TeamName (bat/field)"
     re.compile(
         r"Toss\s*[:\-]\s*([A-Za-z\s]+?)\s*[\(\,]\s*(bat|bowl|field)",
         re.I,
     ),
-    # Pattern 3 — "Toss: TeamName , opt to bat/field"
     re.compile(
         r"Toss\s*[:\-]\s*([A-Za-z\s]+?)\s*,\s*opt(?:ed)?\s+to\s+(bat|bowl|field)",
         re.I,
     ),
-    # Pattern 4 — JSON inline
     re.compile(
         r'"tossWinner"\s*:\s*"([^"]+)".*?"tossDecision"\s*:\s*"([^"]+)"',
         re.I | re.DOTALL,
     ),
-    # Pattern 5 — broad fallback
     re.compile(
-        r"toss[^.]{0,60}?(bat(?:ting)?|bowl(?:ing)?|field(?:ing)?)",
+        r"toss[^.]{0,80}?(bat(?:ting)?|bowl(?:ing)?|field(?:ing)?)",
         re.I,
     ),
 ]
 
 
-def _parse_toss_from_text(page_text, team1, team2):
-    """Try all toss patterns. Returns (toss_winner, toss_decision) or ('', None)."""
+def _parse_toss_from_text(text, team1, team2):
+    """Try all patterns. Returns (winner, decision) or ('', None)."""
     for i, pat in enumerate(_TOSS_PATTERNS):
-        m = pat.search(page_text)
+        m = pat.search(text)
         if not m:
             continue
 
         if i < 4:
             raw_winner   = _clean_text(m.group(1))
-            raw_decision = m.group(2).lower() if m.lastindex >= 2 else ""
+            raw_decision = (m.group(2) if m.lastindex >= 2 else "").lower()
         else:
             raw_winner   = ""
             raw_decision = m.group(1).lower()
@@ -419,21 +446,19 @@ def _parse_toss_from_text(page_text, team1, team2):
                 winner = candidate
                 break
         if not winner and raw_winner:
-            t1_overlap = len(
-                set(raw_winner.lower().split()) &
-                set(team1.lower().split())
+            t1_score = len(
+                set(raw_winner.lower().split()) & set(team1.lower().split())
             ) if team1 else 0
-            t2_overlap = len(
-                set(raw_winner.lower().split()) &
-                set(team2.lower().split())
+            t2_score = len(
+                set(raw_winner.lower().split()) & set(team2.lower().split())
             ) if team2 else 0
-            if t1_overlap > t2_overlap:
+            if t1_score > t2_score:
                 winner = team1
-            elif t2_overlap > t1_overlap:
+            elif t2_score > t1_score:
                 winner = team2
 
         if winner and decision:
-            print(f"[DEBUG] Toss Pattern {i+1}: winner='{winner}' decision='{decision}'")
+            print(f"[TOSS] Pattern {i+1} matched: '{winner}' elected to '{decision}'")
             return winner, decision
 
     return "", None
@@ -441,56 +466,82 @@ def _parse_toss_from_text(page_text, team1, team2):
 
 def _get_toss_from_cricbuzz_html(match_id, team1, team2):
     """
-    Targeted HTML scrape for toss.
-    Tries CSS selectors first, then sentence-level regex.
+    Scrape Cricbuzz match page for toss.
+    Tries targeted selectors → sentence split → full-page.
     """
     try:
         url  = MATCH_URL_TEMPLATE.format(match_id=match_id)
         soup = _request_soup(url)
 
-        # Method A: specific CSS selectors
-        toss_selectors = [
+        # Method A — CSS selectors
+        for selector in [
             "div.cb-toss-sts",
             "span.cb-toss-sts",
             "div.cb-mtch-info-itm",
             "div[class*='toss']",
             "p[class*='toss']",
             "div.cb-text-complete",
-            "div.cb-scrd-sub-hdr",
-        ]
-        for selector in toss_selectors:
+        ]:
             for el in soup.select(selector):
                 text = _clean_text(el.get_text(" ", strip=True))
                 if "toss" in text.lower():
-                    print(f"[DEBUG] Toss element [{selector}]: {text[:150]}")
-                    winner, decision = _parse_toss_from_text(text, team1, team2)
-                    if winner and decision:
-                        return winner, decision
+                    print(f"[HTML] Toss element [{selector}]: {text[:150]}")
+                    w, d = _parse_toss_from_text(text, team1, team2)
+                    if w and d:
+                        return w, d
 
-        # Method B: toss-containing sentences
-        full_text = _clean_text(soup.get_text(" ", strip=True))
-        for sentence in re.split(r'[.!?\n]', full_text):
+        # Method B — sentences
+        full = _clean_text(soup.get_text(" ", strip=True))
+        for sentence in re.split(r'[.!?\n]', full):
             if "toss" in sentence.lower():
-                print(f"[DEBUG] Toss sentence: {sentence[:150]}")
-                winner, decision = _parse_toss_from_text(sentence, team1, team2)
-                if winner and decision:
-                    return winner, decision
+                print(f"[HTML] Toss sentence: {sentence[:150]}")
+                w, d = _parse_toss_from_text(sentence, team1, team2)
+                if w and d:
+                    return w, d
 
-        # Method C: full page fallback
-        winner, decision = _parse_toss_from_text(full_text, team1, team2)
-        if winner and decision:
-            return winner, decision
+        # Method C — full page
+        w, d = _parse_toss_from_text(full, team1, team2)
+        if w and d:
+            return w, d
 
-        print("[DEBUG] No toss found in Cricbuzz HTML")
-        return "", None
-
+        print("[HTML] No toss found")
     except Exception as e:
-        print(f"[DEBUG] _get_toss_from_cricbuzz_html error: {e}")
-        return "", None
+        print(f"[HTML] _get_toss_from_cricbuzz_html error: {e}")
+
+    return "", None
+
+
+def _get_toss_from_cricbuzz_commentary(match_id, team1, team2):
+    """
+    Try Cricbuzz commentary API for toss sentence.
+    Commentary often has 'won the toss' in early entries.
+    """
+    try:
+        data      = _request_json(_CB_COMMENTARY_URL.format(match_id=match_id))
+        comm_list = (
+            data.get("commentaryList", [])
+            or data.get("commentary", [])
+            or []
+        )
+        for entry in comm_list:
+            text = _clean_text(
+                entry.get("commText", "")
+                or entry.get("text", "")
+                or entry.get("commentary", "")
+                or ""
+            )
+            if "toss" in text.lower():
+                print(f"[COMM] Toss commentary: {text[:150]}")
+                w, d = _parse_toss_from_text(text, team1, team2)
+                if w and d:
+                    return w, d
+    except Exception as e:
+        print(f"[COMM] Commentary toss error: {e}")
+    return "", None
 
 
 # ─────────────────────────────────────────────────────────
-# PLAYING XI — HTML extraction
+# PLAYING XI — HTML
 # ─────────────────────────────────────────────────────────
 def _split_player_list(raw_text):
     text = _clean_text(raw_text)
@@ -509,10 +560,9 @@ def _split_player_list(raw_text):
 
 
 def _extract_playing_xi(page_text, team1, team2):
-    if not page_text:
-        return [], []
-
     t1_xi, t2_xi = [], []
+    if not page_text:
+        return t1_xi, t2_xi
 
     if team1 and team2:
         for t_name, other in [(team1, team2), (team2, team1)]:
@@ -531,9 +581,9 @@ def _extract_playing_xi(page_text, team1, team2):
 
     if not t1_xi or not t2_xi:
         generic = re.findall(
-            r"(?:Playing\s*)?XI\s*[:\-]\s*(.*?)(?=(?:Playing\s*)?XI|Impact\s*Subs|$)",
-            page_text,
-            re.I | re.DOTALL,
+            r"(?:Playing\s*)?XI\s*[:\-]\s*(.*?)"
+            r"(?=(?:Playing\s*)?XI|Impact\s*Subs|$)",
+            page_text, re.I | re.DOTALL,
         )
         if len(generic) >= 2:
             if not t1_xi:
@@ -548,37 +598,32 @@ def _extract_playing_xi(page_text, team1, team2):
 # TEAM NAME UTILITIES
 # ─────────────────────────────────────────────────────────
 def _normalize_team_name(name, team_encoder=None):
-    name  = _clean_text(name)
+    name = _correct_team_name(_clean_text(name))
     if not name:
         return name
-
-    # Apply corrections first
-    name = _correct_team_name(name)
-
     upper = name.upper()
     if upper in TEAM_ALIASES:
         return TEAM_ALIASES[upper]
     if name in TEAM_ALIASES:
         return TEAM_ALIASES[name]
     if team_encoder is not None:
-        if name in set(team_encoder.classes_.tolist()):
+        classes = list(team_encoder.classes_)
+        if name in classes:
             return name
-        # Try corrected name against encoder
-        for cls in team_encoder.classes_:
+        for cls in classes:
             if cls.lower() == name.lower():
                 return cls
     return name
 
 
 def _safe_encode(encoder, value):
-    classes = set(encoder.classes_.tolist())
+    classes = list(encoder.classes_)
     if value in classes:
         return int(encoder.transform([value])[0])
-    # Try case-insensitive match
-    for cls in encoder.classes_:
+    for cls in classes:
         if cls.lower() == value.lower():
             return int(encoder.transform([cls])[0])
-    return int(encoder.transform([encoder.classes_[0]])[0])
+    return int(encoder.transform([classes[0]])[0])
 
 
 def _safe_div(num, den, fallback):
@@ -586,7 +631,7 @@ def _safe_div(num, den, fallback):
 
 
 # ─────────────────────────────────────────────────────────
-# PLAYER / TEAM STAT HELPERS
+# STAT HELPERS
 # ─────────────────────────────────────────────────────────
 def _team_winrate(matches, team):
     tm = matches[(matches["team1"] == team) | (matches["team2"] == team)]
@@ -620,12 +665,9 @@ def _chase_metrics(matches, team):
 
 def _global_player_defaults(player_lookup):
     cols = {
-        "batting_avg":        25.0,
-        "strike_rate":        125.0,
-        "economy":            8.5,
-        "bowling_avg":        30.0,
-        "recent_strike_rate": 125.0,
-        "recent_economy":     8.5,
+        "batting_avg": 25.0, "strike_rate": 125.0,
+        "economy": 8.5, "bowling_avg": 30.0,
+        "recent_strike_rate": 125.0, "recent_economy": 8.5,
     }
     d = {
         c: float(player_lookup[c].mean()) if c in player_lookup.columns else fb
@@ -660,10 +702,60 @@ def _player_stats_for_xi(player_lookup, xi, defaults):
 
 
 # ─────────────────────────────────────────────────────────
+# TOSS RESOLUTION — tries all sources in order
+# ─────────────────────────────────────────────────────────
+def _resolve_toss(match_id, team1, team2, espn_info=None):
+    """
+    Try every available source for toss data.
+    Returns (toss_winner, toss_decision) or ("", None).
+
+    Order:
+      1. ESPN match_info deep search
+      2. Cricbuzz JSON API
+      3. Cricbuzz HTML page
+      4. Cricbuzz commentary API
+    """
+    # 1. ESPN
+    if espn_info is not None:
+        tw, td = _extract_toss_from_espn_info(espn_info, team1, team2)
+        if tw and td:
+            print(f"[TOSS] Resolved via ESPN: {tw} / {td}")
+            return tw, td
+        print("[TOSS] ESPN gave no toss — trying Cricbuzz JSON")
+
+    # 2. Cricbuzz JSON
+    try:
+        cb = _cricbuzz_json_match_info(match_id)
+        if cb and cb.get("toss_done"):
+            print(f"[TOSS] Resolved via CricbuzzJSON: "
+                  f"{cb['toss_winner']} / {cb['toss_decision']}")
+            return cb["toss_winner"], cb["toss_decision"]
+        print("[TOSS] CricbuzzJSON gave no toss — trying HTML")
+    except Exception as e:
+        print(f"[TOSS] CricbuzzJSON exception: {e}")
+
+    # 3. HTML
+    tw, td = _get_toss_from_cricbuzz_html(match_id, team1, team2)
+    if tw and td:
+        print(f"[TOSS] Resolved via HTML: {tw} / {td}")
+        return tw, td
+    print("[TOSS] HTML gave no toss — trying commentary")
+
+    # 4. Commentary
+    tw, td = _get_toss_from_cricbuzz_commentary(match_id, team1, team2)
+    if tw and td:
+        print(f"[TOSS] Resolved via commentary: {tw} / {td}")
+        return tw, td
+
+    print("[TOSS] All sources exhausted — toss not found")
+    return "", None
+
+
+# ─────────────────────────────────────────────────────────
 # PUBLIC API
 # ─────────────────────────────────────────────────────────
 def get_todays_match_id():
-    """Return today's IPL match ID — ESPN first, Cricbuzz fallback."""
+    """Return today's IPL match ID."""
     try:
         m = _get_espn_live_match()
         if m:
@@ -689,72 +781,57 @@ def get_todays_match_id():
 
 def scrape_match(match_id):
     """
-    Scrape all match details for match_id.
-    Priority:
-      1. ESPN Cricinfo (cricdata)
-      2. Cricbuzz JSON API
-      3. Cricbuzz HTML scrape
+    Scrape all match details. Returns dict expected by app.py.
 
-    After each source, if toss_done is still False,
-    we fall through to HTML toss extraction.
+    Strategy:
+      - Try ESPN for teams + XI
+      - Use _resolve_toss() for toss (tries all 4 sources)
+      - Fall back to Cricbuzz JSON then HTML for teams if ESPN fails
     """
     errors = []
 
-    # ── 1. ESPN Cricinfo ──────────────────────────────────
+    # ── 1. ESPN ───────────────────────────────────────────
     try:
         espn_match = _get_espn_live_match(match_id=match_id)
         if espn_match:
             series    = espn_match.get("series", {})
             s_slug    = f"{series.get('slug')}-{series.get('objectId')}"
             m_slug    = f"{espn_match.get('slug')}-{espn_match.get('objectId')}"
+
             info      = _CRICINFO_CLIENT.match_info(s_slug, m_slug)
             scorecard = _CRICINFO_CLIENT.match_scorecard(s_slug, m_slug)
 
-            print(f"[DEBUG] ESPN match_info type: {type(info)}")
-            print(f"[DEBUG] ESPN match_info keys: {list(info.keys()) if isinstance(info, dict) else 'N/A'}")
-
             teams   = espn_match.get("teams", []) or []
             t_names = [t.get("team", {}).get("longName", "") for t in teams]
-            team1   = _correct_team_name(_clean_text(t_names[0] if t_names else "Unknown"))
-            team2   = _correct_team_name(_clean_text(t_names[1] if len(t_names) > 1 else "Unknown"))
+            team1   = _correct_team_name(_clean_text(t_names[0] if t_names else ""))
+            team2   = _correct_team_name(_clean_text(t_names[1] if len(t_names) > 1 else ""))
+
+            if not team1 or not team2:
+                raise ValueError("Empty team names from ESPN")
 
             venue = (
-                _clean_text(info.get("venue", {}).get("longName", ""))
-                if isinstance(info, dict) else ""
+                _clean_text(
+                    (info or {}).get("venue", {}).get("longName", "")
+                ) if isinstance(info, dict) else ""
             ) or _clean_text(
                 espn_match.get("ground", {}).get("longName", "")
             ) or "Unknown Venue"
 
-            # ── Toss extraction — ESPN ────────────────────
-            tw, td = _extract_toss_from_espn(info, team1, team2)
-
-            # If ESPN toss failed, try Cricbuzz HTML
-            if not tw or not td:
-                print("[DEBUG] ESPN toss empty — falling back to Cricbuzz HTML toss")
-                tw, td = _get_toss_from_cricbuzz_html(match_id, team1, team2)
-
-            # If still no toss, try Cricbuzz JSON
-            if not tw or not td:
-                print("[DEBUG] Cricbuzz HTML toss empty — trying Cricbuzz JSON toss")
-                cb_info = _cricbuzz_json_match_info(match_id)
-                if cb_info and cb_info.get("toss_done"):
-                    tw = cb_info["toss_winner"]
-                    td = cb_info["toss_decision"]
+            # Toss — use unified resolver
+            tw, td = _resolve_toss(match_id, team1, team2, espn_info=info)
 
             toss_done    = bool(tw and td)
             chasing_team = None
             if toss_done:
-                if td == "bat":
-                    chasing_team = team2 if tw == team1 else team1
-                else:
-                    chasing_team = tw
+                chasing_team = (
+                    (team2 if tw == team1 else team1) if td == "bat" else tw
+                )
 
-            # XI from ESPN scorecard
+            # XI
             xi_map   = _extract_xi_from_scorecard(scorecard)
             team1_xi = xi_map.get(team1, [])
             team2_xi = xi_map.get(team2, [])
-
-            # Also try original team name key (before correction)
+            # Fallback: match by corrected name
             if not team1_xi:
                 for k, v in xi_map.items():
                     if _correct_team_name(k) == team1:
@@ -766,8 +843,8 @@ def scrape_match(match_id):
                         team2_xi = v
                         break
 
-            print(f"[DEBUG] ESPN final: team1='{team1}' team2='{team2}' "
-                  f"toss_done={toss_done} winner='{tw}' decision='{td}'")
+            print(f"[ESPN] Done: team1='{team1}' team2='{team2}' "
+                  f"toss_done={toss_done} tw='{tw}' td='{td}'")
 
             return {
                 "match_id":      int(match_id),
@@ -776,7 +853,7 @@ def scrape_match(match_id):
                 "venue":         venue,
                 "toss_done":     toss_done,
                 "toss_winner":   tw or None,
-                "toss_decision": td,
+                "toss_decision": td or None,
                 "chasing_team":  chasing_team,
                 "team1_xi":      team1_xi,
                 "team2_xi":      team2_xi,
@@ -785,38 +862,30 @@ def scrape_match(match_id):
             }
     except Exception as e:
         errors.append(f"ESPN: {e}")
-        print(f"[DEBUG] ESPN scrape error: {e}")
+        print(f"[ESPN] Error: {e}")
 
-    # ── 2. Cricbuzz JSON API ──────────────────────────────
+    # ── 2. Cricbuzz JSON ──────────────────────────────────
     try:
         cb_info = _cricbuzz_json_match_info(match_id)
         if cb_info and cb_info.get("team1"):
             team1 = cb_info["team1"]
             team2 = cb_info["team2"]
 
-            toss_done     = cb_info["toss_done"]
-            toss_winner   = cb_info["toss_winner"]
-            toss_decision = cb_info["toss_decision"]
-            chasing_team  = cb_info["chasing_team"]
+            tw = cb_info["toss_winner"] or ""
+            td = cb_info["toss_decision"] or ""
 
-            # Fallback to HTML toss if JSON toss missing
-            if not toss_done:
-                print("[DEBUG] CricbuzzJSON toss empty — trying HTML toss")
-                tw_html, td_html = _get_toss_from_cricbuzz_html(
-                    match_id, team1, team2
+            # Toss fallback
+            if not tw or not td:
+                tw, td = _resolve_toss(match_id, team1, team2, espn_info=None)
+
+            toss_done    = bool(tw and td)
+            chasing_team = None
+            if toss_done:
+                chasing_team = (
+                    (team2 if tw == team1 else team1) if td == "bat" else tw
                 )
-                if tw_html and td_html:
-                    toss_done     = True
-                    toss_winner   = tw_html
-                    toss_decision = td_html
-                    chasing_team  = (
-                        (team2 if toss_winner == team1 else team1)
-                        if toss_decision == "bat" else toss_winner
-                    )
-                    print(f"[DEBUG] HTML toss recovered: "
-                          f"winner='{toss_winner}' decision='{toss_decision}'")
 
-            xi1_json, xi2_json = _cricbuzz_json_xi(match_id)
+            xi1, xi2 = _cricbuzz_json_xi(match_id)
 
             return {
                 "match_id":      int(match_id),
@@ -824,19 +893,19 @@ def scrape_match(match_id):
                 "team2":         team2,
                 "venue":         cb_info.get("venue", "Unknown Venue"),
                 "toss_done":     toss_done,
-                "toss_winner":   toss_winner,
-                "toss_decision": toss_decision,
+                "toss_winner":   tw or None,
+                "toss_decision": td or None,
                 "chasing_team":  chasing_team,
-                "team1_xi":      xi1_json,
-                "team2_xi":      xi2_json,
+                "team1_xi":      xi1,
+                "team2_xi":      xi2,
                 "source":        "cricbuzz_json",
                 "scraped_at":    datetime.utcnow().isoformat() + "Z",
             }
     except Exception as e:
         errors.append(f"CricbuzzJSON: {e}")
-        print(f"[DEBUG] CricbuzzJSON scrape error: {e}")
+        print(f"[CB-JSON] Error: {e}")
 
-    # ── 3. Cricbuzz HTML scrape ───────────────────────────
+    # ── 3. Cricbuzz HTML ──────────────────────────────────
     try:
         soup      = _request_soup(MATCH_URL_TEMPLATE.format(match_id=match_id))
         page_text = _clean_text(soup.get_text(" ", strip=True))
@@ -863,28 +932,17 @@ def scrape_match(match_id):
                     team2 = _correct_team_name(_clean_text(mc.group(2)))
 
         venue = "Unknown Venue"
-        vm = re.search(
-            r"Venue\s*[:\-]\s*(.*?)(?:\s*[•·]\s*|\s{2,}|$)",
-            page_text, re.I,
-        )
+        vm = re.search(r"Venue\s*[:\-]\s*(.*?)(?:\s*[•·]\s*|\s{2,}|$)", page_text, re.I)
         if vm:
             venue = _clean_text(vm.group(1))
 
-        toss_winner, toss_decision = _get_toss_from_cricbuzz_html(
-            match_id, team1, team2
-        )
-        if not toss_winner:
-            toss_winner, toss_decision = _parse_toss_from_text(
-                page_text, team1, team2
-            )
-
-        toss_done    = bool(toss_winner and toss_decision)
+        tw, td = _resolve_toss(match_id, team1, team2, espn_info=None)
+        toss_done    = bool(tw and td)
         chasing_team = None
         if toss_done:
-            if toss_decision == "bat":
-                chasing_team = team2 if toss_winner == team1 else team1
-            else:
-                chasing_team = toss_winner
+            chasing_team = (
+                (team2 if tw == team1 else team1) if td == "bat" else tw
+            )
 
         team1_xi, team2_xi = _extract_playing_xi(page_text, team1, team2)
 
@@ -894,8 +952,8 @@ def scrape_match(match_id):
             "team2":         team2,
             "venue":         venue,
             "toss_done":     toss_done,
-            "toss_winner":   toss_winner or None,
-            "toss_decision": toss_decision,
+            "toss_winner":   tw or None,
+            "toss_decision": td or None,
             "chasing_team":  chasing_team,
             "team1_xi":      team1_xi,
             "team2_xi":      team2_xi,
@@ -904,7 +962,7 @@ def scrape_match(match_id):
         }
     except Exception as e:
         errors.append(f"CricbuzzHTML: {e}")
-        print(f"[DEBUG] HTML scrape error: {e}")
+        print(f"[HTML] Error: {e}")
 
     return {"error": " | ".join(errors)}
 
@@ -925,14 +983,16 @@ def build_feature_vector(
     venue = _clean_text(match_info.get("venue", ""))
     now   = pd.Timestamp(datetime.today().date())
 
-    print(f"[DEBUG] build_feature_vector: team1='{team1}' team2='{team2}'")
-    print(f"[DEBUG] Encoder classes: {list(team_encoder.classes_)}")
+    print(f"[FEAT] team1='{team1}' team2='{team2}'")
+    print(f"[FEAT] Encoder classes: {list(team_encoder.classes_)}")
+    print(f"[FEAT] CSV team1 sample: {list(matches['team1'].unique()[:8])}")
 
     t1_id    = _safe_encode(team_encoder, team1)
     t2_id    = _safe_encode(team_encoder, team2)
     venue_id = _safe_encode(
         venue_encoder,
-        venue if venue in set(venue_encoder.classes_.tolist()) else venue_encoder.classes_[0],
+        venue if venue in set(venue_encoder.classes_.tolist())
+        else venue_encoder.classes_[0],
     )
 
     t1_h2h, t2_h2h = _h2h(matches, team1, team2)
@@ -941,8 +1001,7 @@ def build_feature_vector(
     t1_cp,  t1_hc  = _chase_metrics(matches, team1)
     t2_cp,  t2_hc  = _chase_metrics(matches, team2)
 
-    print(f"[DEBUG] H2H: t1={t1_h2h} t2={t2_h2h}")
-    print(f"[DEBUG] Matches team1 values sample: {matches['team1'].unique()[:5]}")
+    print(f"[FEAT] H2H t1={t1_h2h} t2={t2_h2h}  winrate t1={t1_wr:.2f} t2={t2_wr:.2f}")
 
     season_avg  = float(get_season_avg_score(now))
     season_year = int(get_season_year(now))
@@ -980,8 +1039,12 @@ def build_feature_vector(
     t2_open = team_opener_lookup.get(team2, op_def)
 
     defaults = _global_player_defaults(player_lookup)
-    t1_stats = _player_stats_for_xi(player_lookup, match_info.get("team1_xi", []), defaults)
-    t2_stats = _player_stats_for_xi(player_lookup, match_info.get("team2_xi", []), defaults)
+    t1_stats = _player_stats_for_xi(
+        player_lookup, match_info.get("team1_xi", []), defaults
+    )
+    t2_stats = _player_stats_for_xi(
+        player_lookup, match_info.get("team2_xi", []), defaults
+    )
 
     feat = {c: 0.0 for c in feature_cols}
     feat.update({
