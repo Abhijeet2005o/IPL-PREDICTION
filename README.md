@@ -8,10 +8,10 @@ AI-powered IPL match prediction using 17 years of data + live ESPNcricinfo JSON 
 ## What It Predicts
 | Prediction | Model | Performance |
 |-----------|-------|-------------|
-| Match winner + probability | XGBoost Classifier | 77.3% accuracy |
-| First innings score | XGBoost Regressor | 34.9 RMSE |
-| Opener partnership runs | Random Forest | ~37 RMSE |
-| Second innings score | XGBoost Regressor | 22.1 RMSE |
+| Match winner + probability | Voting  | 81.6% accuracy |
+| First innings score | XGBoost Regressor | RMSE 24.1 |
+| 2nd innings score |  XGBoost Regressor | RMSE 19.6 |
+| Powerplay   score |  XGBoost Regressor |  RMSE 16.6 |
 
 ## How It Works
 1. Click **GET PREDICTION**
