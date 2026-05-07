@@ -15,6 +15,7 @@ if PROJECT_ROOT not in sys.path:
 from scraper import espncricinfo_scraper
 from data.ground_types import get_ground_info
 
+# ─── Imports from Scraper ───
 scrape_match = espncricinfo_scraper.scrape_match
 build_feature_vector = espncricinfo_scraper.build_feature_vector
 get_todays_match_id = espncricinfo_scraper.get_todays_match_id
@@ -47,16 +48,12 @@ st.markdown("""
     border-radius: 20px;
     padding: 20px;
     margin-bottom: 15px;
-    box-shadow: 
-        0 8px 32px 0 rgba(0, 0, 0, 0.5),
-        inset 0 0 20px rgba(0, 255, 255, 0.02);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5), inset 0 0 20px rgba(0, 255, 255, 0.02);
     transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 .card-3d:hover {
     transform: translateY(-5px) scale(1.01);
-    box-shadow: 
-        0 15px 45px 0 rgba(0, 255, 255, 0.15),
-        inset 0 0 25px rgba(0, 255, 255, 0.05);
+    box-shadow: 0 15px 45px 0 rgba(0, 255, 255, 0.15), inset 0 0 25px rgba(0, 255, 255, 0.05);
     border-color: rgba(0, 255, 255, 0.3);
 }
 
@@ -127,8 +124,7 @@ def load_everything():
         'winner': joblib.load('models/winner_model.pkl'),
         'score': joblib.load('models/score_model.pkl'),
         'second_innings': joblib.load('models/second_innings_model.pkl'),
-        # Re-using opener model for Powerplay Score
-        'pp_score': joblib.load('models/opener_model.pkl') 
+        'pp_score': joblib.load('models/opener_model.pkl') # Using Opener model for PP Score
     }
     
     encoders = {
@@ -156,17 +152,14 @@ def load_everything():
     
     tsl = pd.read_csv('data/team_scores_long.csv')
     tsl['match_date'] = pd.to_datetime(tsl['match_date'])
-    if 'team' in tsl.columns:
-        tsl['team'] = tsl['team'].str.strip()
+    if 'team' in tsl.columns: tsl['team'] = tsl['team'].str.strip()
         
     pp_df = pd.read_csv('data/team_pp_eco.csv')
-    if 'team_name' in pp_df.columns:
-        pp_df['team_name'] = pp_df['team_name'].str.strip()
+    if 'team_name' in pp_df.columns: pp_df['team_name'] = pp_df['team_name'].str.strip()
     pp_eco = dict(zip(pp_df['team_name'], pp_df['avg_pp_economy']))
     
     op_df = pd.read_csv('data/team_opener_lookup.csv')
-    if 'team_name' in op_df.columns:
-        op_df['team_name'] = op_df['team_name'].str.strip()
+    if 'team_name' in op_df.columns: op_df['team_name'] = op_df['team_name'].str.strip()
     op_lkp = {
         row['team_name']: {
             'opener_avg_batting_avg': float(row['opener_avg_batting_avg']),
@@ -177,7 +170,6 @@ def load_everything():
     
     return models, encoders, feature_cols, matches, vsh, tsl, pp_eco, op_lkp
 
-# ─── Initialize ───
 try:
     models, encoders, feature_cols, matches, vsh, tsl, pp_eco, op_lkp = load_everything()
 except Exception as e:
@@ -186,6 +178,7 @@ except Exception as e:
 
 # ─── Helpers ───
 def h2h_stats(team1, team2):
+    # Use the fixer from scraper
     t1 = espncricinfo_scraper._normalize_team_name(team1)
     t2 = espncricinfo_scraper._normalize_team_name(team2)
     
@@ -263,7 +256,7 @@ if predict_btn:
     # ─── Prediction Engine ───
     with st.spinner("🧠 Running Neural Models..."):
         try:
-            # Helper functions passed to build_feature_vector
+            # Helper functions for the feature vector builder
             def get_team_recent_avg_score(team, cd, n=5): return get_recent_avg(team, n)
             def get_team_recent_high_score_rate(team, cd, n=10): return get_recent_high_rate(team, n)
             
@@ -275,9 +268,9 @@ if predict_btn:
                 encoders['team'], encoders['venue'],
                 vsh, pp_eco, op_lkp,
                 get_team_recent_avg_score, 
-                lambda d: 170, # Season Avg dummy
-                lambda d: 2026, # Year dummy
-                lambda v, d: 167, # Venue Avg dummy
+                lambda d: 170, 
+                lambda d: 2026, 
+                lambda v, d: 167, 
                 get_team_recent_high_score_rate,
                 feature_cols
             )
@@ -286,9 +279,9 @@ if predict_btn:
             # 1. 1st Innings Score
             pred_1st = float(models['score'].predict(feats)[0])
             
-            # 2. 2nd Innings Score (Needs target_score)
+            # 2. 2nd Innings Score (Needs target_score injected)
             second_inn_feats = feats.copy()
-            second_inn_feats['target_score'] = pred_1st # Inject prediction
+            second_inn_feats['target_score'] = pred_1st 
             pred_2nd = float(models['second_innings'].predict(second_inn_feats)[0])
             
             # 3. Powerplay Score (Using opener model file)
@@ -356,7 +349,7 @@ if predict_btn:
     st.markdown(f"""
     <div class="card-3d">
         <h3>🏟️ Pitch Report</h3>
-        <div style="display:flex; justify-content:space-around;">
+        <div style="display:flex; justify-content:space-around; flex-wrap:wrap;">
             <div><b>Type:</b> {ground.get('type', 'Balanced')}</div>
             <div><b>Avg Score:</b> {ground.get('avg_score', 165)}</div>
             <div><b>Dew:</b> {ground.get('dew_factor', 'Medium')}</div>
