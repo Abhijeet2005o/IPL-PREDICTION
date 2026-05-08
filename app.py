@@ -1,9 +1,7 @@
-# app.py — UPDATED with Powerplay model, 2nd Innings model, bug fixes
-# Models: winner_model, score_model, second_innings_model, powerplay_model (opener_model.pkl)
+# app.py — UPDATED v3 with Powerplay + 2nd Innings predictions (no opener model)
 
 import streamlit as st
 import pandas as pd
-import numpy as np
 import joblib
 import pickle
 import sys
@@ -36,13 +34,13 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────
-# CSS
+# CSS (unchanged from original)
 # ─────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;500;600;700&family=Rajdhani:wght@400;500;600;700&display=swap');
 
-*,* ::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 .stApp {
     background: linear-gradient(135deg, #0a0a0f 0%, #0d1117 40%, #0a0f1e 70%, #0d0a1a 100%);
@@ -659,37 +657,35 @@ st.markdown("""
 # ─────────────────────────────────────────────────────────
 @st.cache_resource
 def load_everything():
-    winner_model     = joblib.load('models/winner_model.pkl')
-    score_model      = joblib.load('models/score_model.pkl')
-    second_inn_model = joblib.load('models/second_innings_model.pkl')
-    powerplay_model  = joblib.load('models/opener_model.pkl')  # PP model saved as opener_model.pkl
-    team_encoder     = joblib.load('models/team_encoder.pkl')
-    venue_encoder    = joblib.load('models/venue_encoder.pkl')
-    player_lookup    = pd.read_csv('player_stats/player_lookup.csv')
+    # ── Models ───────────────────────────────────────────
+    winner_model         = joblib.load('models/winner_model.pkl')
+    score_model          = joblib.load('models/score_model.pkl')
+    # NEW: second_innings_model replaces opener_model
+    second_innings_model = joblib.load('models/second_innings_model.pkl')
+    team_encoder         = joblib.load('models/team_encoder.pkl')
+    venue_encoder        = joblib.load('models/venue_encoder.pkl')
+
+    # ── Lookup tables ─────────────────────────────────────
+    player_lookup = pd.read_csv('player_stats/player_lookup.csv')
 
     with open('data/feature_cols.pkl', 'rb') as f:
         feature_cols = pickle.load(f)
 
+    # ── Historical match data ─────────────────────────────
     m_raw = pd.read_csv('data/all_ipl_matches_data.csv')
     t_raw = pd.read_csv('data/all_teams_data.csv')
 
-    # Strip whitespace from team names
+    # CRITICAL: Strip whitespace from team names
     t_raw['team_name'] = t_raw['team_name'].str.strip()
-
     t_map = dict(zip(t_raw['team_id'], t_raw['team_name']))
-    m_raw['team1']  = m_raw['team1'].map(t_map)
-    m_raw['team2']  = m_raw['team2'].map(t_map)
-    m_raw['winner'] = m_raw['match_winner'].map(t_map)
-
-    # Strip whitespace from all team columns
-    m_raw['team1']  = m_raw['team1'].str.strip()
-    m_raw['team2']  = m_raw['team2'].str.strip()
-    m_raw['winner'] = m_raw['winner'].str.strip()
-
+    m_raw['team1']  = m_raw['team1'].map(t_map).str.strip()
+    m_raw['team2']  = m_raw['team2'].map(t_map).str.strip()
+    m_raw['winner'] = m_raw['match_winner'].map(t_map).str.strip()
     m_raw.rename(columns={'match_id': 'id'}, inplace=True)
     m_clean = m_raw[m_raw['result'] == 'win'].reset_index(drop=True)
     m_clean['match_date'] = pd.to_datetime(m_clean['match_date'])
 
+    # ── Score history ─────────────────────────────────────
     vsh = pd.read_csv('data/venue_score_history.csv')
     vsh['match_date'] = pd.to_datetime(vsh['match_date'])
 
@@ -698,11 +694,13 @@ def load_everything():
     if 'team' in tsl.columns:
         tsl['team'] = tsl['team'].str.strip()
 
+    # ── Powerplay economy lookup ──────────────────────────
     pp_df = pd.read_csv('data/team_pp_eco.csv')
     if 'team_name' in pp_df.columns:
         pp_df['team_name'] = pp_df['team_name'].str.strip()
     pp_eco = dict(zip(pp_df['team_name'], pp_df['avg_pp_economy']))
 
+    # ── Opener batting lookup (still needed as model features) ─
     op_df = pd.read_csv('data/team_opener_lookup.csv')
     if 'team_name' in op_df.columns:
         op_df['team_name'] = op_df['team_name'].str.strip()
@@ -715,14 +713,14 @@ def load_everything():
     }
 
     return (
-        winner_model, score_model, second_inn_model, powerplay_model,
+        winner_model, score_model, second_innings_model,
         team_encoder, venue_encoder, player_lookup, feature_cols,
         m_clean, vsh, tsl, pp_eco, op_lkp,
     )
 
 
 (
-    winner_model, score_model, second_inn_model, powerplay_model,
+    winner_model, score_model, second_innings_model,
     team_encoder, venue_encoder, player_lookup, feature_cols,
     matches, venue_score_history, team_scores_long,
     team_pp_eco_lookup, team_opener_lookup,
@@ -730,7 +728,7 @@ def load_everything():
 
 
 # ─────────────────────────────────────────────────────────
-# STAT HELPERS
+# STAT HELPERS (unchanged)
 # ─────────────────────────────────────────────────────────
 def get_team_recent_avg_score(team, current_date, n=5):
     team = team.strip()
@@ -748,7 +746,7 @@ def get_venue_recent_avg_score(venue, current_date, n=15):
     ].tail(n)
     if len(past):
         return float(past['first_innings_score'].mean())
-    base = venue.split(',')[0].strip()
+    base  = venue.split(',')[0].strip()
     past2 = venue_score_history[
         venue_score_history['venue'].str.contains(base, case=False, na=False) &
         (venue_score_history['match_date'] < current_date)
@@ -758,7 +756,7 @@ def get_venue_recent_avg_score(venue, current_date, n=15):
 
 def get_season_avg_score(current_date):
     yr = current_date.year
-    s = team_scores_long[
+    s  = team_scores_long[
         (team_scores_long['match_date'].dt.year == yr) &
         (team_scores_long['match_date'] < current_date)
     ]
@@ -785,6 +783,7 @@ def get_team_recent_high_score_rate(team, current_date, n=10):
 
 
 def align_features_for_model(base_feats, model):
+    """Align DataFrame columns to what the model expects."""
     expected = list(getattr(model, "feature_names_in_", []))
     if not expected:
         return base_feats
@@ -794,9 +793,6 @@ def align_features_for_model(base_feats, model):
             aligned[col] = base_feats[col]
         elif col == "opp_pp_economy" and "t2_pp_bowling_economy" in base_feats.columns:
             aligned[col] = base_feats["t2_pp_bowling_economy"]
-        elif col == "target_score":
-            # Will be filled later for 2nd innings model
-            aligned[col] = 0.0
         else:
             aligned[col] = 0.0
     return aligned
@@ -809,17 +805,23 @@ def parse_xi_input(raw_text):
 
 
 def h2h_stats(team1, team2):
-    """H2H with team name correction."""
+    """H2H with team name correction applied."""
     t1 = espncricinfo_scraper._correct_team_name(team1).strip()
     t2 = espncricinfo_scraper._correct_team_name(team2).strip()
+
+    print(f"[H2H] Looking for: '{t1}' vs '{t2}'")
+    print(f"[H2H] CSV unique team1 values (first 10): {list(matches['team1'].unique()[:10])}")
+    print(f"[H2H] CSV unique team2 values (first 10): {list(matches['team2'].unique()[:10])}")
 
     h = matches[
         ((matches['team1'] == t1) & (matches['team2'] == t2)) |
         ((matches['team1'] == t2) & (matches['team2'] == t1))
     ]
 
+    print(f"[H2H] Found {len(h)} matches")
+
     if h.empty:
-        # Fallback: partial match
+        print("[H2H] No exact matches, trying partial match...")
         t1_key = t1.split()[0]
         t2_key = t2.split()[0]
         h = matches[
@@ -828,6 +830,7 @@ def h2h_stats(team1, team2):
             (matches['team1'].str.contains(t2_key, case=False, na=False) &
              matches['team2'].str.contains(t1_key, case=False, na=False))
         ]
+        print(f"[H2H] Partial match found {len(h)} matches")
 
     t1w = int((h['winner'] == t1).sum())
     t2w = int((h['winner'] == t2).sum())
@@ -835,6 +838,7 @@ def h2h_stats(team1, team2):
 
 
 def check_team_in_csv(team_name):
+    """Returns (corrected_name, found_in_csv)."""
     corrected = espncricinfo_scraper._correct_team_name(team_name).strip()
     found = (
         corrected in matches['team1'].values or
@@ -844,13 +848,59 @@ def check_team_in_csv(team_name):
 
 
 # ─────────────────────────────────────────────────────────
+# POWERPLAY RUNS ESTIMATE (no separate model needed —
+#  derived from team_pp_eco_lookup at prediction time)
+# ─────────────────────────────────────────────────────────
+def estimate_powerplay_runs(team1, team2, match_info, team_pp_eco_lookup):
+    """
+    Estimate expected powerplay runs for the batting-first team.
+
+    Logic:
+      - Powerplay economy (runs/over) is stored by BOWLING team.
+      - If batting_first_team is known: pp_runs ≈ bowling_team's economy × 6 overs
+      - Pre-toss: average of both scenarios.
+
+    Returns (pp_runs_estimate, batting_first_team_name_or_None)
+    """
+    toss_done     = bool(match_info.get("toss_done", False))
+    toss_winner   = match_info.get("toss_winner", "")
+    toss_decision = match_info.get("toss_decision", "")
+
+    default_eco = (
+        float(sum(team_pp_eco_lookup.values()) / len(team_pp_eco_lookup))
+        if team_pp_eco_lookup else 8.5
+    )
+
+    if toss_done and toss_winner and toss_decision:
+        # Determine who bats first
+        if (toss_winner == team1 and toss_decision == "bat") or \
+           (toss_winner == team2 and toss_decision == "field"):
+            batting_first = team1
+            bowling_first = team2
+        else:
+            batting_first = team2
+            bowling_first = team1
+
+        # bowling_first team's PP economy = expected runs given up per over
+        bowling_eco = float(team_pp_eco_lookup.get(bowling_first, default_eco))
+        pp_est      = round(bowling_eco * 6, 1)   # 6 overs
+        return pp_est, batting_first
+    else:
+        # Pre-toss: average of both scenarios
+        eco_if_t1_bats = float(team_pp_eco_lookup.get(team2, default_eco))
+        eco_if_t2_bats = float(team_pp_eco_lookup.get(team1, default_eco))
+        pp_est = round(((eco_if_t1_bats + eco_if_t2_bats) / 2) * 6, 1)
+        return pp_est, None
+
+
+# ─────────────────────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown('<div class="sidebar-logo">🏏 IPL AI 2026</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="sidebar-section">Match Override</div>', unsafe_allow_html=True)
-    manual_match_id = st.text_input(
+    manual_match_id  = st.text_input(
         "Match ID", value="", placeholder="e.g. 1529286"
     )
     manual_series_id = st.text_input(
@@ -1025,6 +1075,14 @@ if go:
                 "team2_corrected": t2c,
                 "team2_in_csv":    t2f,
             })
+        st.info(
+            "📋 Check your **terminal / console** for detailed logs:\n"
+            "- `[TOSS-RESOLVE]` for toss detection waterfall\n"
+            "- `[ESPN-TOSS]`, `[CB-JSON]`, `[HTML-TOSS]`, `[COMM-TOSS]` for each source\n"
+            "- `[H2H]` for head-to-head query details\n"
+            "- `[FEAT]` for feature building\n"
+            "- `[SCRAPE]` for overall scraping progress"
+        )
 
     # Error guard
     if not match_info or match_info.get("error") or not match_info.get("team1"):
@@ -1056,33 +1114,27 @@ if go:
             get_team_recent_high_score_rate, feature_cols,
         )
 
-        w_feats = align_features_for_model(feats, winner_model)
-        s_feats = align_features_for_model(feats, score_model)
-        pp_feats = align_features_for_model(feats, powerplay_model)
+        # Align each model to its expected feature set
+        w_feats  = align_features_for_model(feats, winner_model)
+        s_feats  = align_features_for_model(feats, score_model)
 
         try:
-            # 1. Winner prediction
             w_pred = winner_model.predict(w_feats)[0]
             w_prob = winner_model.predict_proba(w_feats)[0]
+            s_pred = float(score_model.predict(s_feats)[0])
 
-            # 2. 1st innings score prediction
-            s_pred = score_model.predict(s_feats)[0]
-
-            # 3. Powerplay score prediction (uses opener_model.pkl)
-            pp_pred = powerplay_model.predict(pp_feats)[0]
-
-            # 4. 2nd innings score prediction (needs target_score = 1st inn prediction)
-            s2_feats = align_features_for_model(feats, second_inn_model)
-            s2_feats['target_score'] = s_pred  # inject predicted 1st innings as target
-            s2_pred = second_inn_model.predict(s2_feats)[0]
+            # ── 2nd innings model ─────────────────────────
+            # Add predicted 1st innings score as target for chasing team model
+            s2_feats_df = feats.copy()
+            s2_feats_df['target_score'] = s_pred
+            s2_feats = align_features_for_model(s2_feats_df, second_innings_model)
+            s2_pred  = float(second_innings_model.predict(s2_feats)[0])
 
         except Exception as e:
             st.markdown(
                 f'<div class="banner banner-err">❌ Model error — {e}</div>',
                 unsafe_allow_html=True,
             )
-            import traceback
-            st.code(traceback.format_exc())
             st.stop()
 
     # ── Derived values ────────────────────────────────────
@@ -1092,6 +1144,11 @@ if go:
     win_prob    = w_prob[int(w_pred)] * 100
     lose_prob   = 100 - win_prob
     toss_done   = bool(match_info.get("toss_done", False))
+
+    # ── Powerplay runs estimate ───────────────────────────
+    pp_est, batting_first_team = estimate_powerplay_runs(
+        team1, team2, match_info, team_pp_eco_lookup
+    )
 
     # ── Team name mismatch warning ────────────────────────
     t1c, t1f = check_team_in_csv(team1)
@@ -1106,7 +1163,8 @@ if go:
             f'<div class="mismatch-card">'
             f'⚠️ Team name(s) not found in historical CSV — '
             f'{" | ".join(missing)}. '
-            f'H2H and win-rate stats may be inaccurate.'
+            f'H2H and win-rate stats may be inaccurate. '
+            f'Check spelling in <code>all_teams_data.csv</code> and ensure names are stripped.'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -1262,7 +1320,8 @@ if go:
             '<div class="pretoss-text">'
             'Toss not yet detected. '
             'Click <b>PREDICT NOW</b> again after the toss — or use '
-            '<b>Manual Toss Override</b> in the sidebar for an instant update.'
+            '<b>Manual Toss Override</b> in the sidebar for an instant update. '
+            'Check terminal for <code>[TOSS-RESOLVE]</code> logs to see which detection methods were tried.'
             '</div></div>',
             unsafe_allow_html=True,
         )
@@ -1279,8 +1338,8 @@ if go:
     if total == 0:
         st.markdown(
             '<div class="banner banner-warn">'
-            '⚠️ No H2H matches found — teams may have different names in CSV '
-            'or this could be their first encounter.'
+            '⚠️ No H2H matches found — check terminal for <code>[H2H]</code> logs. '
+            'Teams may have different names in CSV or this could be their first encounter.'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -1423,7 +1482,7 @@ if go:
     )
 
     badge_class = "post-toss" if toss_done else "pre-toss"
-    badge_text = (
+    badge_text  = (
         "✅ POST-TOSS · TOSS FACTORED IN"
         if toss_done else
         "⏳ PRE-TOSS · HISTORICAL ESTIMATE"
@@ -1468,16 +1527,23 @@ if go:
     )
 
     # ═════════════════════════════════════════════════════
-    # STAT TILES — Updated: PP Runs + 2nd Inn instead of Opener
+    # STAT TILES  ── 5 tiles now (added PP + 2nd Inn)
     # ═════════════════════════════════════════════════════
-    sc1, sc2, sc3, sc4 = st.columns(4)
+    # Powerplay context label
+    pp_context = (
+        f"Batting: {batting_first_team.split()[-1]}"
+        if batting_first_team else "Avg estimate (pre-toss)"
+    )
+
+    sc1, sc2, sc3, sc4, sc5 = st.columns(5)
     for col, (icon, val, label) in zip(
-        [sc1, sc2, sc3, sc4],
+        [sc1, sc2, sc3, sc4, sc5],
         [
-            ("🏆", pred_winner.split()[-1], "Predicted Winner"),
-            ("🎲", f"{win_prob:.1f}%",       "Win Probability"),
-            ("📈", f"{int(s_pred)}",          "1st Inn. Score"),
-            ("🏏", f"~{int(pp_pred)}",        "Powerplay Runs"),
+            ("🏆", pred_winner.split()[-1],  "Predicted Winner"),
+            ("🎲", f"{win_prob:.1f}%",        "Win Probability"),
+            ("📈", f"{int(s_pred)}",           "1st Inn. Score"),
+            ("⚡", f"~{int(pp_est)}",          "Powerplay Runs"),
+            ("🎯", f"~{int(s2_pred)}",         "2nd Inn. Score"),
         ],
     ):
         with col:
@@ -1490,40 +1556,20 @@ if go:
                 unsafe_allow_html=True,
             )
 
-    # ═════════════════════════════════════════════════════
-    # 2ND INNINGS PREDICTION CARD
-    # ═════════════════════════════════════════════════════
-    st.markdown(
-        '<div class="fancy-divider"><span>SCORE PREDICTIONS</span></div>',
-        unsafe_allow_html=True,
-    )
-
-    sc_a, sc_b, sc_c = st.columns(3)
-    with sc_a:
+    # ── Powerplay context note ────────────────────────────
+    if toss_done and batting_first_team:
         st.markdown(
-            f'<div class="stat-card">'
-            f'<div class="stat-icon">⚡</div>'
-            f'<div class="stat-val">~{int(pp_pred)}</div>'
-            f'<div class="stat-label">Powerplay (0-6 ov)</div>'
+            f'<div class="banner banner-info" style="margin-top:0.4rem;">'
+            f'⚡ Powerplay estimate based on <b>{batting_first_team}</b> batting first '
+            f'(opponent\'s avg PP bowling economy × 6 overs)'
             f'</div>',
             unsafe_allow_html=True,
         )
-    with sc_b:
+    else:
         st.markdown(
-            f'<div class="stat-card">'
-            f'<div class="stat-icon">📈</div>'
-            f'<div class="stat-val">{int(s_pred)}</div>'
-            f'<div class="stat-label">1st Innings Score</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-    with sc_c:
-        st.markdown(
-            f'<div class="stat-card">'
-            f'<div class="stat-icon">📉</div>'
-            f'<div class="stat-val">{int(s2_pred)}</div>'
-            f'<div class="stat-label">2nd Innings Score</div>'
-            f'</div>',
+            '<div class="banner banner-info" style="margin-top:0.4rem;">'
+            '⚡ Powerplay runs shown as pre-toss average — will update once toss is done'
+            '</div>',
             unsafe_allow_html=True,
         )
 
