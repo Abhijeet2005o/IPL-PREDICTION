@@ -274,6 +274,44 @@ CB_MATCH_INFO_URL = "https://www.cricbuzz.com/api/cricket-match/{match_id}/info"
 CB_SCORECARD_URL = "https://www.cricbuzz.com/api/cricket-match/{match_id}/scorecard"
 CB_COMMENTARY_URL = "https://www.cricbuzz.com/api/cricket-match/{match_id}/commentary"
 
+def _find_cricbuzz_match_id(team1, team2):
+    """Find Cricbuzz match ID by searching for teams."""
+    try:
+        print(f"[CB-FIND] Searching for match: {team1} vs {team2}")
+        soup = _request_soup(LIVE_SCORES_URL)
+        
+        # Look for links containing team names
+        team1_lower = team1.lower()
+        team2_lower = team2.lower()
+        
+        for link in soup.select("a[href*='/live-cricket-scores/']"):
+            href = link.get("href", "")
+            text = _clean_text(link.get_text()).lower()
+            
+            # Check if both team names are in the link text
+            if team1_lower in text and team2_lower in text:
+                match = re.search(r"/live-cricket-scores/(\d+)", href)
+                if match:
+                    match_id = int(match.group(1))
+                    print(f"[CB-FIND] Found match ID: {match_id}")
+                    return match_id
+        
+        # Alternative: search by URL pattern
+        for link in soup.select("a[href*='/live-cricket-scores/']"):
+            href = link.get("href", "")
+            # Check for team abbreviations or names in URL
+            if any(t.lower() in href.lower() for t in [team1, team2]):
+                match = re.search(r"/live-cricket-scores/(\d+)", href)
+                if match:
+                    match_id = int(match.group(1))
+                    print(f"[CB-FIND] Found match ID by URL: {match_id}")
+                    return match_id
+        
+        print(f"[CB-FIND] Could not find match ID for {team1} vs {team2}")
+    except Exception as e:
+        print(f"[CB-FIND] Error finding match ID: {e}")
+    return None
+
 def _cricbuzz_json_match_info(match_id):
     """Cricbuzz JSON API — match info + toss."""
     try:
@@ -732,12 +770,18 @@ def _player_stats_for_xi(player_lookup, xi, defaults):
 # ─────────────────────────────────────────────────────────
 # TOSS RESOLUTION
 # ─────────────────────────────────────────────────────────
-def _resolve_toss(match_id, team1, team2, espn_info=None):
+def _resolve_toss(match_id, team1, team2, espn_info=None, cricbuzz_id=None):
     """
     Try every available source for toss data.
     Returns (toss_winner, toss_decision) or ('', None).
     """
     print(f"\n[TOSS-RESOLVE] Starting toss resolution for teams: '{team1}' vs '{team2}'")
+    
+    # Use provided Cricbuzz ID or try to find it
+    cb_match_id = cricbuzz_id or _find_cricbuzz_match_id(team1, team2)
+    if not cb_match_id:
+        print("[TOSS-RESOLVE] No Cricbuzz match ID available")
+        cb_match_id = match_id  # Fallback to original ID
 
     # 1. ESPN
     if espn_info is not None:
@@ -751,7 +795,7 @@ def _resolve_toss(match_id, team1, team2, espn_info=None):
     # 2. Cricbuzz JSON
     try:
         print("[TOSS-RESOLVE] Trying Cricbuzz JSON API...")
-        cb = _cricbuzz_json_match_info(match_id)
+        cb = _cricbuzz_json_match_info(cb_match_id)
         if cb and cb.get("toss_done"):
             print(f"[TOSS-RESOLVE] ✓ SUCCESS via CricbuzzJSON: "
                   f"{cb['toss_winner']} / {cb['toss_decision']}")
@@ -762,7 +806,7 @@ def _resolve_toss(match_id, team1, team2, espn_info=None):
 
     # 3. HTML
     print("[TOSS-RESOLVE] Trying Cricbuzz HTML scraping...")
-    tw, td = _get_toss_from_cricbuzz_html(match_id, team1, team2)
+    tw, td = _get_toss_from_cricbuzz_html(cb_match_id, team1, team2)
     if tw and td:
         print(f"[TOSS-RESOLVE] ✓ SUCCESS via HTML: {tw} / {td}")
         return tw, td
@@ -770,7 +814,7 @@ def _resolve_toss(match_id, team1, team2, espn_info=None):
 
     # 4. Commentary
     print("[TOSS-RESOLVE] Trying Cricbuzz commentary...")
-    tw, td = _get_toss_from_cricbuzz_commentary(match_id, team1, team2)
+    tw, td = _get_toss_from_cricbuzz_commentary(cb_match_id, team1, team2)
     if tw and td:
         print(f"[TOSS-RESOLVE] ✓ SUCCESS via commentary: {tw} / {td}")
         return tw, td
@@ -783,14 +827,7 @@ def _resolve_toss(match_id, team1, team2, espn_info=None):
 # PUBLIC API
 # ─────────────────────────────────────────────────────────
 def get_todays_match_id():
-    """Return today's IPL match ID."""
-    try:
-        m = _get_espn_live_match()
-        if m:
-            return int(m.get("objectId"))
-    except Exception:
-        pass
-
+    """Return today's IPL match ID (Cricbuzz ID)."""
     try:
         soup = _request_soup(LIVE_SCORES_URL)
         links = soup.select("a[href*='/live-cricket-scores/']")
@@ -801,6 +838,14 @@ def get_todays_match_id():
             match = re.search(r"/live-cricket-scores/(\d+)", href)
             if match:
                 return int(match.group(1))
+    except Exception:
+        pass
+    
+    # Fallback to ESPN if available
+    try:
+        m = _get_espn_live_match()
+        if m:
+            return int(m.get("objectId"))
     except Exception:
         pass
 
@@ -847,7 +892,11 @@ def scrape_match(match_id):
             print(f"[SCRAPE-ESPN] Teams: '{team1}' vs '{team2}'")
             print(f"[SCRAPE-ESPN] Venue: '{venue}'")
 
-            tw, td = _resolve_toss(match_id, team1, team2, espn_info=info)
+            # Find Cricbuzz match ID for the same teams
+            cricbuzz_id = _find_cricbuzz_match_id(team1, team2)
+            print(f"[SCRAPE-ESPN] Cricbuzz match ID: {cricbuzz_id}")
+
+            tw, td = _resolve_toss(match_id, team1, team2, espn_info=info, cricbuzz_id=cricbuzz_id)
 
             toss_done = bool(tw and td)
             chasing_team = None
@@ -885,6 +934,7 @@ def scrape_match(match_id):
                 "team1_xi": team1_xi,
                 "team2_xi": team2_xi,
                 "source": "espn",
+                "cricbuzz_id": cricbuzz_id,
                 "scraped_at": datetime.utcnow().isoformat() + "Z",
             }
     except Exception as e:
