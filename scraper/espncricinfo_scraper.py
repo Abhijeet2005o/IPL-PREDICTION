@@ -1,7 +1,6 @@
 import re
 import json
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional, Any
 
 import pandas as pd
 import requests
@@ -19,8 +18,6 @@ except Exception:
 IPL_SERIES_ID = "1510719"
 LIVE_SCORES_URL = "https://www.cricbuzz.com/cricket-match/live-scores"
 MATCH_URL_TEMPLATE = "https://www.cricbuzz.com/live-cricket-scores/{match_id}"
-MATCH_SQUADS_URL = "https://www.cricbuzz.com/live-cricket-scorecard/{match_id}"
-
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -71,22 +68,25 @@ TEAM_NAME_CORRECTIONS = {
     "Royal Challengers Bengaluru ": "Royal Challengers Bangalore",
 }
 
-TEAM_TO_ABBR = {v: k for k, v in TEAM_ABBREVIATIONS.items()}
-
-KNOWN_XI: Dict[int, Dict[str, List[str]]] = {}
-
-
-def _clean_text(value: Any) -> str:
+# ─────────────────────────────────────────────────────────
+# UTILITIES
+# ─────────────────────────────────────────────────────────
+def _clean_text(value):
+    """Clean and normalize text, removing extra whitespace."""
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
-
-def _request_soup(url: str, timeout: int = 20) -> BeautifulSoup:
+def _request_soup(url, timeout=20):
     resp = requests.get(url, headers=HEADERS, timeout=timeout)
     resp.raise_for_status()
     return BeautifulSoup(resp.text, "html.parser")
 
+def _request_json(url, timeout=20):
+    resp = requests.get(url, headers=HEADERS, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()
 
-def _correct_team_name(name: str) -> str:
+def _correct_team_name(name):
+    """Map variant spellings to canonical CSV name."""
     name = _clean_text(name)
     if not name:
         return name
@@ -101,8 +101,7 @@ def _correct_team_name(name: str) -> str:
             return right
     return name
 
-
-def _normalize_team_name(name: str, team_encoder=None) -> str:
+def _normalize_team_name(name, team_encoder=None):
     name = _correct_team_name(_clean_text(name))
     if not name:
         return name
@@ -120,8 +119,7 @@ def _normalize_team_name(name: str, team_encoder=None) -> str:
                 return cls
     return name
 
-
-def _safe_encode(encoder, value: str) -> int:
+def _safe_encode(encoder, value):
     classes = list(encoder.classes_)
     if value in classes:
         return int(encoder.transform([value])[0])
@@ -130,23 +128,13 @@ def _safe_encode(encoder, value: str) -> int:
             return int(encoder.transform([cls])[0])
     return int(encoder.transform([classes[0]])[0])
 
-
-def _safe_div(num: float, den: float, fallback: float) -> float:
+def _safe_div(num, den, fallback):
     return float(num / den) if den else float(fallback)
 
-
-def _extract_player_name(text: str) -> str:
-    """Extract clean player name - removes (c), (wk), †, * etc."""
-    name = re.sub(r'\s*[\(\[].*?[\)\]]', '', text)
-    name = re.sub(r'[†*]', '', name)
-    name = _clean_text(name)
-    return name
-
-
 # ─────────────────────────────────────────────────────────
-# ESPN CRICINFO FUNCTIONS
+# ESPN CRICINFO
 # ─────────────────────────────────────────────────────────
-def _get_espn_live_match(match_id: Optional[int] = None) -> Optional[dict]:
+def _get_espn_live_match(match_id=None):
     if not CRICDATA_AVAILABLE or CRICINFO_CLIENT is None:
         return None
     try:
@@ -163,17 +151,17 @@ def _get_espn_live_match(match_id: Optional[int] = None) -> Optional[dict]:
         if match_id is None:
             return candidates[0] if candidates else None
 
-        match_id_str = str(match_id).strip()
+        match_id = str(match_id).strip()
         for m in candidates:
-            if str(m.get("objectId", "")).strip() == match_id_str:
+            if str(m.get("objectId", "")).strip() == match_id:
                 return m
     except Exception as e:
         print(f"[ESPN] _get_espn_live_match error: {e}")
     return None
 
-
-def _extract_xi_from_scorecard(scorecard: dict) -> Dict[str, List[str]]:
-    team_xi: Dict[str, List[str]] = {}
+def _extract_xi_from_scorecard(scorecard):
+    """Extract Playing XI from ESPN scorecard."""
+    team_xi = {}
     try:
         team_players = (
             scorecard.get("content", {})
@@ -197,8 +185,8 @@ def _extract_xi_from_scorecard(scorecard: dict) -> Dict[str, List[str]]:
         print(f"[ESPN] _extract_xi_from_scorecard error: {e}")
     return team_xi
 
-
-def _extract_toss_from_espn_info(info: dict, team1: str, team2: str) -> Tuple[str, Optional[str]]:
+def _extract_toss_from_espn_info(info, team1, team2):
+    """Extract toss from ESPN match_info."""
     if not isinstance(info, dict):
         return "", None
 
@@ -211,8 +199,12 @@ def _extract_toss_from_espn_info(info: dict, team1: str, team2: str) -> Tuple[st
                     val = obj[candidate]
                     if isinstance(val, dict) and val:
                         return val
-            has_winner = any(k.lower() in {"tosswinner", "tosswinnerid", "winnerid", "winner"} for k in obj)
-            has_decision = any(k.lower() in {"decision", "tossdecision", "elected", "choice"} for k in obj)
+            has_winner = any(k.lower() in {
+                "tosswinner", "tosswinnerid", "winnerid", "winner"
+            } for k in obj)
+            has_decision = any(k.lower() in {
+                "decision", "tossdecision", "elected", "choice"
+            } for k in obj)
             if has_winner and has_decision:
                 return obj
             for v in obj.values():
@@ -231,10 +223,16 @@ def _extract_toss_from_espn_info(info: dict, team1: str, team2: str) -> Tuple[st
         return "", None
 
     tw_raw = _clean_text(
-        toss.get("winner_team", "") or toss.get("tossWinner", "") or toss.get("winner", "") or ""
+        toss.get("winner_team", "")
+        or toss.get("tossWinner", "")
+        or toss.get("winner", "")
+        or ""
     )
+
     td_raw = _clean_text(
-        toss.get("decision", "") or toss.get("tossDecision", "") or ""
+        toss.get("decision", "")
+        or toss.get("tossDecision", "")
+        or ""
     ).lower()
 
     td = None
@@ -252,228 +250,11 @@ def _extract_toss_from_espn_info(info: dict, team1: str, team2: str) -> Tuple[st
 
     return tw, td
 
-
-# ═══════════════════════════════════════════════════════════
-# NEW: CRICBUZZ PLAYING XI EXTRACTION
-# ═══════════════════════════════════════════════════════════
-def get_playing_xi_from_cricbuzz(match_id: int, team1: str, team2: str) -> Dict[str, List[str]]:
-    """
-    Extract Playing XI from Cricbuzz match page.
-    PRIMARY source for live Playing XI data.
-    """
-    team_xi: Dict[str, List[str]] = {}
-    
-    try:
-        url = MATCH_URL_TEMPLATE.format(match_id=match_id)
-        print(f"[CB-XI] Fetching: {url}")
-        
-        resp = requests.get(url, headers=HEADERS, timeout=20)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        page_text = resp.text
-        
-        # METHOD 1: Match info section
-        info_items = soup.select(".cb-mtch-info-itm")
-        for item in info_items:
-            label_div = item.select_one(".cb-col.cb-col-27")
-            value_div = item.select_one(".cb-col.cb-col-73")
-            
-            if label_div and value_div:
-                label_text = _clean_text(label_div.get_text()).lower()
-                
-                if any(x in label_text for x in ["squad", "playing", "xi", "team"]):
-                    current_team = None
-                    for t in [team1, team2]:
-                        if t and t.lower() in label_text:
-                            current_team = t
-                            break
-                    
-                    if current_team:
-                        player_links = value_div.select("a")
-                        names = [_extract_player_name(link.get_text()) for link in player_links]
-                        names = [n for n in names if n and len(n) > 2][:11]
-                        if names:
-                            team_xi[current_team] = names
-                            print(f"[CB-XI] Method 1: Found {len(names)} players for {current_team}")
-        
-        # METHOD 2: Playing XI section headers
-        if len(team_xi) < 2:
-            headers = soup.select(".cb-col.cb-col-100.cb-font-14, .cb-minfo-tm-nm")
-            
-            for header in headers:
-                header_text = _clean_text(header.get_text())
-                
-                current_team = None
-                for t in [team1, team2]:
-                    if t:
-                        t_lower = t.lower()
-                        abbr = TEAM_TO_ABBR.get(t, "").lower()
-                        if (t_lower in header_text.lower() or 
-                            (abbr and abbr in header_text.lower())):
-                            if "playing" in header_text.lower() or "xi" in header_text.lower():
-                                current_team = t
-                                break
-                
-                if current_team and current_team not in team_xi:
-                    parent = header.find_parent()
-                    if parent:
-                        player_links = parent.select("a[href*='/profiles/']")
-                        if not player_links:
-                            player_links = parent.select("a[href*='/cricket-player/']")
-                        
-                        names = [_extract_player_name(link.get_text()) for link in player_links]
-                        names = [n for n in names if n and len(n) > 2][:11]
-                        if names:
-                            team_xi[current_team] = names
-                            print(f"[CB-XI] Method 2: Found {len(names)} players for {current_team}")
-        
-        # METHOD 3: Regex pattern from page text
-        if len(team_xi) < 2:
-            xi_patterns = [
-                r'([A-Za-z\s]+?)\s*\(?\s*Playing\s*XI\s*\)?\s*:?\s*([A-Za-z\s,\.]+?)(?=\n|$|[A-Z][a-z]+\s*\()',
-                r'([A-Za-z\s]+?)\s+XI\s*:?\s*([A-Za-z\s,\.]+?)(?=\n|$)',
-            ]
-            
-            for pattern in xi_patterns:
-                matches = re.findall(pattern, page_text, re.IGNORECASE | re.MULTILINE)
-                for match in matches:
-                    team_name_raw = _clean_text(match[0])
-                    players_str = match[1]
-                    
-                    current_team = None
-                    for t in [team1, team2]:
-                        if t and (t.lower() in team_name_raw.lower() or team_name_raw.lower() in t.lower()):
-                            current_team = t
-                            break
-                    
-                    if current_team and current_team not in team_xi:
-                        players = [_extract_player_name(p.strip()) for p in players_str.split(",")]
-                        players = [p for p in players if p and len(p) > 2][:11]
-                        if len(players) >= 5:
-                            team_xi[current_team] = players
-                            print(f"[CB-XI] Method 3: Found {len(players)} players for {current_team}")
-        
-        # METHOD 4: Squad divs
-        if len(team_xi) < 2:
-            squad_sections = soup.select(".cb-play11-lft-col, .cb-minfo-tm-plyr")
-            
-            for section in squad_sections:
-                parent = section.find_parent(class_=re.compile(r'cb-col'))
-                if parent:
-                    section_text = _clean_text(parent.get_text())
-                    
-                    current_team = None
-                    for t in [team1, team2]:
-                        if t and t.lower() in section_text.lower():
-                            current_team = t
-                            break
-                    
-                    if current_team and current_team not in team_xi:
-                        player_links = section.select("a")
-                        names = [_extract_player_name(link.get_text()) for link in player_links]
-                        names = [n for n in names if n and len(n) > 2][:11]
-                        if len(names) >= 5:
-                            team_xi[current_team] = names
-                            print(f"[CB-XI] Method 4: Found {len(names)} players for {current_team}")
-        
-        # METHOD 5: "opt to" pattern
-        if len(team_xi) < 2:
-            opt_pattern = r'([A-Z]{2,4})\s+opt\s+to\s+(?:bat|bowl|field)[.\s]+\1\s*:?\s*([A-Za-z\s,]+?)(?=[A-Z]{2,4}\s*:|$)'
-            matches = re.findall(opt_pattern, page_text, re.IGNORECASE)
-            
-            for match in matches:
-                abbr = match[0].upper()
-                players_str = match[1]
-                
-                if abbr in TEAM_ABBREVIATIONS:
-                    team_full = TEAM_ABBREVIATIONS[abbr]
-                    current_team = None
-                    
-                    for t in [team1, team2]:
-                        if t and t.lower() == team_full.lower():
-                            current_team = t
-                            break
-                    
-                    if current_team and current_team not in team_xi:
-                        players = [_extract_player_name(p.strip()) for p in players_str.split(",")]
-                        players = [p for p in players if p and len(p) > 2][:11]
-                        if len(players) >= 5:
-                            team_xi[current_team] = players
-                            print(f"[CB-XI] Method 5: Found {len(players)} players for {current_team}")
-        
-    except Exception as e:
-        print(f"[CB-XI] Error: {e}")
-    
-    return team_xi
-
-
-def get_playing_xi_from_scorecard(match_id: int, team1: str, team2: str) -> Dict[str, List[str]]:
-    """Extract Playing XI from Cricbuzz scorecard page."""
-    team_xi: Dict[str, List[str]] = {}
-    
-    try:
-        url = MATCH_SQUADS_URL.format(match_id=match_id)
-        print(f"[CB-SCORE] Fetching: {url}")
-        
-        soup = _request_soup(url)
-        
-        innings_blocks = soup.select(".cb-col.cb-col-100.cb-ltst-wgt-hdr")
-        
-        current_team = None
-        for block in innings_blocks:
-            block_text = _clean_text(block.get_text())
-            
-            for t in [team1, team2]:
-                if t:
-                    t_lower = t.lower()
-                    abbr = TEAM_TO_ABBR.get(t, "").lower()
-                    if t_lower in block_text.lower() or (abbr and abbr in block_text.lower()):
-                        if "innings" in block_text.lower():
-                            current_team = t
-                            break
-            
-            if current_team and current_team not in team_xi:
-                parent = block.find_parent()
-                if parent:
-                    batting_rows = parent.select(".cb-col.cb-col-100.cb-scrd-itms")
-                    names = []
-                    
-                    for row in batting_rows:
-                        player_link = row.select_one("a.cb-text-link")
-                        if player_link:
-                            name = _extract_player_name(player_link.get_text())
-                            if name and len(name) > 2 and name not in names:
-                                names.append(name)
-                    
-                    if names:
-                        team_xi[current_team] = names[:11]
-                        print(f"[CB-SCORE] Found {len(names)} batsmen for {current_team}")
-        
-        # Get bowlers for opponent team
-        bowling_rows = soup.select(".cb-col.cb-col-100.cb-scrd-itms")
-        for row in bowling_rows:
-            bowler_div = row.select_one(".cb-col.cb-col-40")
-            if bowler_div:
-                bowler_link = bowler_div.select_one("a")
-                if bowler_link:
-                    name = _extract_player_name(bowler_link.get_text())
-                    if name and len(name) > 2:
-                        for t in [team1, team2]:
-                            if t in team_xi:
-                                other_team = team2 if t == team1 else team1
-                                if other_team not in team_xi:
-                                    team_xi[other_team] = []
-                                if name not in team_xi[other_team] and len(team_xi[other_team]) < 11:
-                                    team_xi[other_team].append(name)
-        
-    except Exception as e:
-        print(f"[CB-SCORE] Error: {e}")
-    
-    return team_xi
-
-
-def get_toss_from_cricbuzz(match_id: int, team1: str, team2: str) -> Tuple[str, Optional[str]]:
-    """Extract toss info from Cricbuzz."""
+# ─────────────────────────────────────────────────────────
+# CRICBUZZ EXTRACTION
+# ─────────────────────────────────────────────────────────
+def get_toss_from_cricbuzz(match_id, team1, team2):
+    """Extract toss info from Cricbuzz HTML."""
     try:
         url = MATCH_URL_TEMPLATE.format(match_id=match_id)
         print(f"[CB-TOSS] Fetching: {url}")
@@ -491,6 +272,8 @@ def get_toss_from_cricbuzz(match_id: int, team1: str, team2: str) -> Tuple[str, 
             for match in matches:
                 team_part = match[0].strip()
                 decision = match[1].lower().strip()
+
+                print(f"[CB-TOSS] Found: '{team_part}' opt to '{decision}'")
 
                 if decision == "bat":
                     toss_decision = "bat"
@@ -524,6 +307,8 @@ def get_toss_from_cricbuzz(match_id: int, team1: str, team2: str) -> Tuple[str, 
             team_name = _clean_text(match[0])
             decision = _clean_text(match[1]).lower()
 
+            print(f"[CB-TOSS] Found Toss: '{team_name}' ({decision})")
+
             if "bat" in decision:
                 toss_decision = "bat"
             elif "bowl" in decision or "field" in decision:
@@ -538,17 +323,18 @@ def get_toss_from_cricbuzz(match_id: int, team1: str, team2: str) -> Tuple[str, 
                     break
 
             if toss_winner:
+                print(f"[CB-TOSS] SUCCESS: {toss_winner} elected to {toss_decision}")
                 return toss_winner, toss_decision
 
+        print("[CB-TOSS] No toss found")
         return "", None
 
     except Exception as e:
         print(f"[CB-TOSS] Error: {e}")
         return "", None
 
-
-def get_teams_from_cricbuzz(match_id: int) -> Tuple[str, str]:
-    """Extract team names from Cricbuzz."""
+def get_teams_from_cricbuzz(match_id):
+    """Extract team names from Cricbuzz HTML."""
     try:
         url = MATCH_URL_TEMPLATE.format(match_id=match_id)
         resp = requests.get(url, headers=HEADERS, timeout=20)
@@ -573,25 +359,16 @@ def get_teams_from_cricbuzz(match_id: int) -> Tuple[str, str]:
                 if vs_match:
                     team1 = _correct_team_name(_clean_text(vs_match.group(1)))
                     team2 = _correct_team_name(_clean_text(vs_match.group(2)))
+                    print(f"[CB-TEAMS] Found from title: {team1} vs {team2}")
                     return team1, team2
-
-        header = soup.select_one(".cb-nav-hdr.cb-font-18")
-        if header:
-            text = _clean_text(header.get_text())
-            vs_match = re.search(r"([A-Za-z\s]+?)\s+vs\.?\s+([A-Za-z\s]+)", text, re.I)
-            if vs_match:
-                team1 = _correct_team_name(_clean_text(vs_match.group(1)))
-                team2 = _correct_team_name(_clean_text(vs_match.group(2)))
-                return team1, team2
 
         return "Unknown", "Unknown"
     except Exception as e:
         print(f"[CB-TEAMS] Error: {e}")
         return "Unknown", "Unknown"
 
-
-def get_venue_from_cricbuzz(match_id: int) -> str:
-    """Extract venue from Cricbuzz."""
+def get_venue_from_cricbuzz(match_id):
+    """Extract venue from Cricbuzz HTML."""
     try:
         url = MATCH_URL_TEMPLATE.format(match_id=match_id)
         resp = requests.get(url, headers=HEADERS, timeout=20)
@@ -601,40 +378,18 @@ def get_venue_from_cricbuzz(match_id: int) -> str:
         for link in soup.select("a[href*='/venues/']"):
             text = _clean_text(link.get_text())
             if text and len(text) > 5:
+                print(f"[CB-VENUE] Found: {text}")
                 return text
-
-        info_items = soup.select(".cb-mtch-info-itm")
-        for item in info_items:
-            label = item.select_one(".cb-col.cb-col-27")
-            value = item.select_one(".cb-col.cb-col-73")
-            if label and value:
-                if "venue" in _clean_text(label.get_text()).lower():
-                    venue = _clean_text(value.get_text())
-                    if venue:
-                        return venue
 
         return "Unknown Venue"
     except Exception as e:
         print(f"[CB-VENUE] Error: {e}")
         return "Unknown Venue"
 
-
-def get_hardcoded_xi(match_id: int, team1: str, team2: str) -> Tuple[List[str], List[str]]:
-    """Get hardcoded XI (LAST RESORT)."""
-    if match_id in KNOWN_XI:
-        xi_data = KNOWN_XI[match_id]
-        team1_xi = xi_data.get(team1, [])
-        team2_xi = xi_data.get(team2, [])
-        if team1_xi and team2_xi:
-            print(f"[HARDCODED-XI] Found XI for match {match_id}")
-            return team1_xi, team2_xi
-    return [], []
-
-
 # ─────────────────────────────────────────────────────────
 # STAT HELPERS
 # ─────────────────────────────────────────────────────────
-def _team_winrate(matches: pd.DataFrame, team: str) -> Tuple[float, float]:
+def _team_winrate(matches, team):
     tm = matches[(matches["team1"] == team) | (matches["team2"] == team)]
     if tm.empty:
         return 0.5, 0.5
@@ -643,8 +398,7 @@ def _team_winrate(matches: pd.DataFrame, team: str) -> Tuple[float, float]:
         float((tm.tail(5)["winner"] == team).mean()),
     )
 
-
-def _h2h(matches: pd.DataFrame, team1: str, team2: str) -> Tuple[int, int]:
+def _h2h(matches, team1, team2):
     h = matches[
         ((matches["team1"] == team1) & (matches["team2"] == team2)) |
         ((matches["team1"] == team2) & (matches["team2"] == team1))
@@ -653,8 +407,7 @@ def _h2h(matches: pd.DataFrame, team1: str, team2: str) -> Tuple[int, int]:
         return 0, 0
     return int((h["winner"] == team1).sum()), int((h["winner"] == team2).sum())
 
-
-def _chase_metrics(matches: pd.DataFrame, team: str) -> Tuple[float, float]:
+def _chase_metrics(matches, team):
     if "win_by_wickets" not in matches.columns:
         return 0.5, 0.4
     tm = matches[(matches["team1"] == team) | (matches["team2"] == team)]
@@ -663,8 +416,7 @@ def _chase_metrics(matches: pd.DataFrame, team: str) -> Tuple[float, float]:
     cw = tm[(tm["winner"] == team) & (tm["win_by_wickets"] > 0)]
     return _safe_div(len(cw), len(tm), 0.5), 0.4 if cw.empty else 1.0
 
-
-def _global_player_defaults(player_lookup: pd.DataFrame) -> Dict[str, float]:
+def _global_player_defaults(player_lookup):
     cols = {
         "batting_avg": 25.0, "strike_rate": 125.0,
         "economy": 8.5, "bowling_avg": 30.0,
@@ -677,12 +429,7 @@ def _global_player_defaults(player_lookup: pd.DataFrame) -> Dict[str, float]:
     d["top3_batting_avg"] = d["batting_avg"]
     return d
 
-
-def _player_stats_for_xi(
-    player_lookup: pd.DataFrame, 
-    xi: List[str], 
-    defaults: Dict[str, float]
-) -> Dict[str, float]:
+def _player_stats_for_xi(player_lookup, xi, defaults):
     if not xi:
         return defaults.copy()
     lk = player_lookup.copy()
@@ -705,12 +452,11 @@ def _player_stats_for_xi(
             out[k] = defaults[k]
     return out
 
-
 # ─────────────────────────────────────────────────────────
 # PUBLIC API
 # ─────────────────────────────────────────────────────────
-def get_todays_match_id() -> Optional[int]:
-    """Return today's IPL match ID."""
+def get_todays_match_id():
+    """Return today's IPL match ID (Cricbuzz ID)."""
     try:
         soup = _request_soup(LIVE_SCORES_URL)
         links = soup.select("a[href*='/live-cricket-scores/']")
@@ -732,22 +478,16 @@ def get_todays_match_id() -> Optional[int]:
         pass
     return None
 
-
-def scrape_match(match_id: int) -> Dict[str, Any]:
+def scrape_match(match_id):
     """
-    Scrape all match details including Playing XI.
-    
-    Data sources (priority order):
-    1. Cricbuzz HTML scraping
-    2. Cricbuzz scorecard page
-    3. ESPN Cricinfo scorecard
-    4. Hardcoded fallback
+    Scrape all match details.
+    Combines ESPN (for XI) and Cricbuzz (for toss, teams, venue).
     """
     print(f"\n{'='*60}")
     print(f"[SCRAPE] Starting scrape for match ID: {match_id}")
     print(f"{'='*60}\n")
 
-    result: Dict[str, Any] = {
+    result = {
         "match_id": int(match_id),
         "team1": "Unknown",
         "team2": "Unknown",
@@ -758,129 +498,128 @@ def scrape_match(match_id: int) -> Dict[str, Any]:
         "chasing_team": None,
         "team1_xi": [],
         "team2_xi": [],
-        "xi_source": None,
-        "source": "cricbuzz",
+        "source": "combined",
         "scraped_at": datetime.utcnow().isoformat() + "Z",
     }
 
-    # Step 1: Get teams
-    print("[SCRAPE] Step 1: Getting team names...")
-    team1, team2 = get_teams_from_cricbuzz(match_id)
-    result["team1"] = team1
-    result["team2"] = team2
-    
-    # Step 2: Get venue
-    print("[SCRAPE] Step 2: Getting venue...")
-    result["venue"] = get_venue_from_cricbuzz(match_id)
-    
-    # Step 3: Get toss
-    print("[SCRAPE] Step 3: Getting toss...")
-    tw, td = get_toss_from_cricbuzz(match_id, team1, team2)
-    if tw and td:
-        result["toss_winner"] = tw
-        result["toss_decision"] = td
-        result["toss_done"] = True
-    
-    # Step 4: Get Playing XI
-    print("[SCRAPE] Step 4: Getting Playing XI...")
-    team_xi: Dict[str, List[str]] = {}
-    
-    # Source 1: Cricbuzz HTML
-    print("[SCRAPE] Trying Cricbuzz HTML...")
-    team_xi = get_playing_xi_from_cricbuzz(match_id, team1, team2)
-    if team_xi.get(team1) and team_xi.get(team2):
-        result["xi_source"] = "cricbuzz_html"
-    
-    # Source 2: Cricbuzz scorecard
-    if not team_xi.get(team1) or not team_xi.get(team2):
-        print("[SCRAPE] Trying Cricbuzz scorecard...")
-        score_xi = get_playing_xi_from_scorecard(match_id, team1, team2)
-        for team, players in score_xi.items():
-            if team not in team_xi or not team_xi[team]:
-                team_xi[team] = players
-        if team_xi.get(team1) and team_xi.get(team2) and not result["xi_source"]:
-            result["xi_source"] = "cricbuzz_scorecard"
-    
-    # Source 3: ESPN
-    if (not team_xi.get(team1) or not team_xi.get(team2)) and CRICDATA_AVAILABLE:
-        print("[SCRAPE] Trying ESPN...")
+    # ── 1. Try ESPN for teams, venue, and XI ─────────────
+    espn_success = False
+    if CRICDATA_AVAILABLE and CRICINFO_CLIENT:
         try:
+            print("[SCRAPE] Attempting ESPN source...")
             espn_match = _get_espn_live_match(match_id=match_id)
             if espn_match:
                 series = espn_match.get("series", {})
                 s_slug = f"{series.get('slug')}-{series.get('objectId')}"
                 m_slug = f"{espn_match.get('slug')}-{espn_match.get('objectId')}"
-                
+
+                info = CRICINFO_CLIENT.match_info(s_slug, m_slug)
                 scorecard = CRICINFO_CLIENT.match_scorecard(s_slug, m_slug)
-                espn_xi = _extract_xi_from_scorecard(scorecard)
-                
-                for team, players in espn_xi.items():
-                    if team not in team_xi or not team_xi[team]:
-                        team_xi[team] = players
-                
-                if team_xi.get(team1) and team_xi.get(team2) and not result["xi_source"]:
-                    result["xi_source"] = "espn"
+
+                teams = espn_match.get("teams", []) or []
+                t_names = [t.get("team", {}).get("longName", "") for t in teams]
+                team1 = _correct_team_name(_clean_text(t_names[0] if t_names else ""))
+                team2 = _correct_team_name(_clean_text(t_names[1] if len(t_names) > 1 else ""))
+
+                if team1 and team2:
+                    result["team1"] = team1
+                    result["team2"] = team2
+
+                    if isinstance(info, dict):
+                        venue = _clean_text(info.get("venue", {}).get("longName", ""))
+                        if venue:
+                            result["venue"] = venue
+
+                    if result["venue"] == "Unknown Venue":
+                        result["venue"] = _clean_text(
+                            espn_match.get("ground", {}).get("longName", "")
+                        ) or "Unknown Venue"
+
+                    xi_map = _extract_xi_from_scorecard(scorecard)
+                    result["team1_xi"] = xi_map.get(team1, [])
+                    result["team2_xi"] = xi_map.get(team2, [])
+
+                    tw, td = _extract_toss_from_espn_info(info, team1, team2)
+                    if tw and td:
+                        result["toss_winner"] = tw
+                        result["toss_decision"] = td
+                        result["toss_done"] = True
+                        print(f"[SCRAPE-ESPN] Toss: {tw} / {td}")
+
+                    espn_success = True
+                    result["source"] = "espn"
+                    print(f"[SCRAPE-ESPN] Teams: {team1} vs {team2}")
+                    print(f"[SCRAPE-ESPN] XI: {len(result['team1_xi'])} vs {len(result['team2_xi'])} players")
         except Exception as e:
-            print(f"[SCRAPE] ESPN error: {e}")
-    
-    # Source 4: Hardcoded
-    if not team_xi.get(team1) or not team_xi.get(team2):
-        print("[SCRAPE] Trying hardcoded...")
-        hc_t1, hc_t2 = get_hardcoded_xi(match_id, team1, team2)
-        if hc_t1 and team1 not in team_xi:
-            team_xi[team1] = hc_t1
-        if hc_t2 and team2 not in team_xi:
-            team_xi[team2] = hc_t2
-        if team_xi.get(team1) and team_xi.get(team2) and not result["xi_source"]:
-            result["xi_source"] = "hardcoded"
-    
-    result["team1_xi"] = team_xi.get(team1, [])
-    result["team2_xi"] = team_xi.get(team2, [])
-    
-    # Step 5: Chasing team
+            print(f"[SCRAPE-ESPN] Failed: {e}")
+
+    # ── 2. Get teams from Cricbuzz if not found ──────────
+    if result["team1"] == "Unknown":
+        print("\n[SCRAPE] Getting teams from Cricbuzz...")
+        team1, team2 = get_teams_from_cricbuzz(match_id)
+        if team1 != "Unknown":
+            result["team1"] = team1
+            result["team2"] = team2
+
+    # ── 3. Get toss from Cricbuzz if not found ───────────
+    if not result["toss_done"]:
+        print("\n[SCRAPE] Getting toss from Cricbuzz...")
+        tw, td = get_toss_from_cricbuzz(match_id, result["team1"], result["team2"])
+        if tw and td:
+            result["toss_winner"] = tw
+            result["toss_decision"] = td
+            result["toss_done"] = True
+            print(f"[SCRAPE] Toss: {tw} / {td}")
+
+    # ── 4. Get venue from Cricbuzz if not found ──────────
+    if result["venue"] == "Unknown Venue":
+        print("\n[SCRAPE] Getting venue from Cricbuzz...")
+        venue = get_venue_from_cricbuzz(match_id)
+        if venue != "Unknown Venue":
+            result["venue"] = venue
+
+    # ── 5. Calculate chasing team ────────────────────────
     if result["toss_done"]:
+        team1 = result["team1"]
+        team2 = result["team2"]
         toss_winner = result["toss_winner"]
         toss_decision = result["toss_decision"]
+
         result["chasing_team"] = (
             (team2 if toss_winner == team1 else team1)
             if toss_decision == "bat" else toss_winner
         )
 
-    # Print summary
-    print(f"\n{'='*60}")
-    print(f"RESULT: {result['team1']} vs {result['team2']}")
-    print(f"Venue: {result['venue']}")
-    print(f"Toss: {result['toss_winner']} - {result['toss_decision']}")
-    print(f"XI Source: {result['xi_source']}")
-    print(f"{result['team1']} XI: {result['team1_xi']}")
-    print(f"{result['team2']} XI: {result['team2_xi']}")
-    print(f"{'='*60}\n")
+    # ── 6. Set source ────────────────────────────────────
+    if not espn_success and result["team1"] != "Unknown":
+        result["source"] = "cricbuzz"
+
+    print(f"\n[SCRAPE] Final result:")
+    print(f"  Teams: {result['team1']} vs {result['team2']}")
+    print(f"  Venue: {result['venue']}")
+    print(f"  Toss: {result['toss_winner']} / {result['toss_decision']}")
+    print(f"  XI: {len(result['team1_xi'])} vs {len(result['team2_xi'])} players")
+    print(f"  Source: {result['source']}")
 
     return result
 
-
+# ─────────────────────────────────────────────────────────
+# FEATURE VECTOR
+# ─────────────────────────────────────────────────────────
 def build_feature_vector(
-    match_info: Dict[str, Any],
-    player_lookup: pd.DataFrame,
-    matches: pd.DataFrame,
-    team_encoder,
-    venue_encoder,
-    venue_score_history: pd.DataFrame,
-    team_pp_eco_lookup: Dict[str, float],
-    team_opener_lookup: Dict[str, Dict[str, float]],
-    get_team_recent_avg_score,
-    get_season_avg_score,
-    get_season_year,
-    get_venue_recent_avg_score,
-    get_team_recent_high_score_rate,
-    feature_cols: List[str],
-) -> pd.DataFrame:
-    """Build feature vector for prediction."""
-    
+    match_info, player_lookup, matches,
+    team_encoder, venue_encoder, venue_score_history,
+    team_pp_eco_lookup, team_opener_lookup,
+    get_team_recent_avg_score, get_season_avg_score,
+    get_season_year, get_venue_recent_avg_score,
+    get_team_recent_high_score_rate, feature_cols,
+):
     team1 = _normalize_team_name(match_info.get("team1"), team_encoder)
     team2 = _normalize_team_name(match_info.get("team2"), team_encoder)
     venue = _clean_text(match_info.get("venue", ""))
     now = pd.Timestamp(datetime.today().date())
+
+    print(f"[FEAT] Building features for: '{team1}' vs '{team2}'")
 
     t1_id = _safe_encode(team_encoder, team1)
     t2_id = _safe_encode(team_encoder, team2)
@@ -895,6 +634,8 @@ def build_feature_vector(
     t2_wr, t2_l5 = _team_winrate(matches, team2)
     t1_cp, t1_hc = _chase_metrics(matches, team1)
     t2_cp, t2_hc = _chase_metrics(matches, team2)
+
+    print(f"[FEAT] H2H: t1={t1_h2h} t2={t2_h2h}  WR: t1={t1_wr:.2f} t2={t2_wr:.2f}")
 
     season_avg = float(get_season_avg_score(now))
     season_year = int(get_season_year(now))
@@ -1008,18 +749,6 @@ def build_feature_vector(
         "pp_run_rate_diff": 0.0,
     })
 
+    print(f"[FEAT] Feature vector built. Total cols: {len(feat)}")
+
     return pd.DataFrame([feat], columns=feature_cols).fillna(0)
-
-
-if __name__ == "__main__":
-    print("IPL Match Scraper - Updated Version")
-    print("With Real-time Playing XI Support\n")
-    
-    match_id = get_todays_match_id()
-    
-    if match_id:
-        print(f"Found match: {match_id}")
-        result = scrape_match(match_id)
-        print(json.dumps(result, indent=2, default=str))
-    else:
-        print("No live IPL match found")
