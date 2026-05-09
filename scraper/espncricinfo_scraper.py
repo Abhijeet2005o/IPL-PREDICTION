@@ -549,5 +549,372 @@ def get_playing_xi_from_squad_page(match_id: int, team1: str, team2: str) -> Dic
         
     except Exception as e:
         print(f"[SQUAD-PAGE] Error: {e}")
+    
+    return team_xi
 
 
+def get_playing_xi_from_scorecard(match_id: int, team1: str, team2: str) -> Dict[str, List[str]]:
+    """
+    Get Playing XI from scorecard page (works after match starts).
+    """
+    team_xi: Dict[str, List[str]] = {}
+    
+    try:
+        url = SCORECARD_URL_TEMPLATE.format(match_id=match_id)
+        soup = _request_soup(url)
+        
+        t1_abbr = IPL_TEAMS_FULL.get(team1, "")
+        t2_abbr = IPL_TEAMS_FULL.get(team2, "")
+        
+        # Find innings headers
+        innings_headers = soup.select(".cb-scrd-hdr-rw, .cb-col-100.cb-scrd-sub-hdr")
+        
+        for header in innings_headers:
+            header_text = _clean_text(header.get_text()).lower()
+            
+            # Identify team
+            current_team = None
+            for t, abbr in [(team1, t1_abbr), (team2, t2_abbr)]:
+                if t and (t.lower() in header_text or (abbr and abbr.lower() in header_text)):
+                    if "innings" in header_text:
+                        current_team = t
+                        break
+            
+            if current_team and current_team not in team_xi:
+                team_xi[current_team] = []
+                
+                # Get players from batting rows
+                parent = header.find_parent()
+                if parent:
+                    rows = parent.select(".cb-scrd-itms, .cb-col-100.cb-scrd-itms")
+                    for row in rows:
+                        player_link = row.select_one("a.cb-text-link, a[href*='/profiles/']")
+                        if player_link:
+                            name = _extract_player_name(player_link.get_text())
+                            if name and len(name) > 2 and name not in team_xi[current_team]:
+                                team_xi[current_team].append(name)
+        
+        # Get bowlers (belong to opposite team)
+        bowling_sections = soup.select(".cb-col-38, .cb-bowl-col")
+        for section in bowling_sections:
+            bowler_link = section.select_one("a")
+            if bowler_link:
+                name = _extract_player_name(bowler_link.get_text())
+                if name and len(name) > 2:
+                    # Add to opposing team
+                    for t in [team1, team2]:
+                        if t in team_xi:
+                            other = team2 if t == team1 else team1
+                            if other not in team_xi:
+                                team_xi[other] = []
+                            if name not in team_xi[other] and len(team_xi[other]) < 11:
+                                team_xi[other].append(name)
+        
+        if team_xi:
+            for t, players in team_xi.items():
+                print(f"[SCORECARD] {t}: {len(players)} players")
+        
+    except Exception as e:
+        print(f"[SCORECARD] Error: {e}")
+    
+    return team_xi
+
+
+def get_playing_xi_from_hardcoded(match_id: int, team1: str, team2: str) -> Dict[str, List[str]]:
+    """Get Playing XI from hardcoded data (backup)."""
+    team_xi: Dict[str, List[str]] = {}
+    
+    if match_id in KNOWN_XI:
+        xi_data = KNOWN_XI[match_id]
+        
+        if team1 in xi_data:
+            team_xi[team1] = xi_data[team1]
+            print(f"[HARDCODED] {team1}: {len(xi_data[team1])} players")
+        
+        if team2 in xi_data:
+            team_xi[team2] = xi_data[team2]
+            print(f"[HARDCODED] {team2}: {len(xi_data[team2])} players")
+    
+    return team_xi
+
+
+# ══════════════════════════════════════════════════════════════
+# STAT HELPERS (for feature building)
+# ══════════════════════════════════════════════════════════════
+
+def _team_winrate(matches: pd.DataFrame, team: str) -> Tuple[float, float]:
+    """Calculate team win rate overall and last 5 matches."""
+    tm = matches[(matches["team1"] == team) | (matches["team2"] == team)]
+    if tm.empty:
+        return 0.5, 0.5
+    return (
+        float((tm["winner"] == team).mean()),
+        float((tm.tail(5)["winner"] == team).mean()),
+    )
+
+
+def _h2h(matches: pd.DataFrame, team1: str, team2: str) -> Tuple[int, int]:
+    """Calculate head-to-head wins."""
+    h = matches[
+        ((matches["team1"] == team1) & (matches["team2"] == team2)) |
+        ((matches["team1"] == team2) & (matches["team2"] == team1))
+    ]
+    if h.empty:
+        return 0, 0
+    return int((h["winner"] == team1).sum()), int((h["winner"] == team2).sum())
+
+
+def _chase_metrics(matches: pd.DataFrame, team: str) -> Tuple[float, float]:
+    """Calculate chase win percentage."""
+    if "win_by_wickets" not in matches.columns:
+        return 0.5, 0.4
+    tm = matches[(matches["team1"] == team) | (matches["team2"] == team)]
+    if tm.empty:
+        return 0.5, 0.4
+    cw = tm[(tm["winner"] == team) & (tm["win_by_wickets"] > 0)]
+    return _safe_div(len(cw), len(tm), 0.5), 0.4 if cw.empty else 1.0
+
+
+def _global_player_defaults(player_lookup: pd.DataFrame) -> Dict[str, float]:
+    """Get global player stat defaults."""
+    cols = {
+        "batting_avg": 25.0, "strike_rate": 125.0,
+        "economy": 8.5, "bowling_avg": 30.0,
+        "recent_strike_rate": 125.0, "recent_economy": 8.5,
+    }
+    d = {
+        c: float(player_lookup[c].mean()) if c in player_lookup.columns else fb
+        for c, fb in cols.items()
+    }
+    d["top3_batting_avg"] = d["batting_avg"]
+    return d
+
+
+def _player_stats_for_xi(
+    player_lookup: pd.DataFrame, 
+    xi: List[str], 
+    defaults: Dict[str, float]
+) -> Dict[str, float]:
+    """Calculate player stats for a given XI."""
+    if not xi:
+        return defaults.copy()
+    lk = player_lookup.copy()
+    lk["player_norm"] = lk["player"].astype(str).str.lower().str.strip()
+    xi_norm = [str(x).lower().strip() for x in xi if str(x).strip()]
+    selected = lk[lk["player_norm"].isin(xi_norm)].reset_index(drop=True)
+    if selected.empty:
+        return defaults.copy()
+    out = {
+        "batting_avg": float(selected["batting_avg"].mean()),
+        "strike_rate": float(selected["strike_rate"].mean()),
+        "top3_batting_avg": float(selected.nlargest(3, "batting_avg")["batting_avg"].mean()),
+        "economy": float(selected["economy"].mean()),
+        "bowling_avg": float(selected["bowling_avg"].mean()),
+        "recent_strike_rate": float(selected["recent_strike_rate"].mean()),
+        "recent_economy": float(selected["recent_economy"].mean()),
+    }
+    for k, v in out.items():
+        if pd.isna(v):
+            out[k] = defaults[k]
+    return out
+
+
+# ══════════════════════════════════════════════════════════════
+# MAIN SCRAPING FUNCTION
+# ══════════════════════════════════════════════════════════════
+
+def scrape_match(match_id: int) -> Dict[str, Any]:
+    """
+    Main function to scrape IPL match data.
+    
+    Returns error if match is not an IPL match.
+    Tries multiple sources for Playing XI.
+    """
+    print(f"\n{'='*70}")
+    print(f"  SCRAPING MATCH: {match_id}")
+    print(f"{'='*70}\n")
+
+    result: Dict[str, Any] = {
+        "match_id": int(match_id),
+        "is_ipl": False,
+        "error": None,
+        "team1": "Unknown",
+        "team2": "Unknown",
+        "venue": "Unknown Venue",
+        "toss_done": False,
+        "toss_winner": None,
+        "toss_decision": None,
+        "chasing_team": None,
+        "team1_xi": [],
+        "team2_xi": [],
+        "xi_source": None,
+        "scraped_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+    # ═══════════════════════════════════════════════════════════
+    # STEP 1: Get team names
+    # ═══════════════════════════════════════════════════════════
+    print("[STEP 1] Getting team names...")
+    team1_raw, team2_raw = get_teams_from_cricbuzz(match_id)
+    print(f"  Raw teams: {team1_raw} vs {team2_raw}")
+
+    # ═══════════════════════════════════════════════════════════
+    # STEP 2: Validate IPL match
+    # ═══════════════════════════════════════════════════════════
+    print("\n[STEP 2] Validating IPL match...")
+    is_valid, team1, team2, error_msg = validate_ipl_match(team1_raw, team2_raw)
+    
+    if not is_valid:
+        result["error"] = f"NOT AN IPL MATCH! {error_msg}"
+        result["team1"] = team1_raw
+        result["team2"] = team2_raw
+        print(f"\n{'='*70}")
+        print(f"  ❌ ERROR: {result['error']}")
+        print(f"{'='*70}\n")
+        return result
+    
+    result["is_ipl"] = True
+    result["team1"] = team1
+    result["team2"] = team2
+    print(f"  ✅ Valid IPL match: {team1} vs {team2}")
+
+    # ═══════════════════════════════════════════════════════════
+    # STEP 3: Get venue
+    # ═══════════════════════════════════════════════════════════
+    print("\n[STEP 3] Getting venue...")
+    result["venue"] = get_venue_from_cricbuzz(match_id)
+
+    # ═══════════════════════════════════════════════════════════
+    # STEP 4: Get toss
+    # ═══════════════════════════════════════════════════════════
+    print("\n[STEP 4] Getting toss...")
+    tw, td = get_toss_from_cricbuzz(match_id, team1, team2)
+    if tw and td:
+        result["toss_winner"] = tw
+        result["toss_decision"] = td
+        result["toss_done"] = True
+    else:
+        print("  ⚠️ Toss not yet done or not detected")
+
+    # ═══════════════════════════════════════════════════════════
+    # STEP 5: Get Playing XI (multiple sources)
+    # ═══════════════════════════════════════════════════════════
+    print("\n[STEP 5] Getting Playing XI...")
+    team_xi: Dict[str, List[str]] = {}
+
+    # Source 1: Squad Page
+    print("\n  [5.1] Trying squad page...")
+    team_xi = get_playing_xi_from_squad_page(match_id, team1, team2)
+    if team_xi.get(team1) and team_xi.get(team2):
+        result["xi_source"] = "squad_page"
+
+    # Source 2: Scorecard
+    if not team_xi.get(team1) or not team_xi.get(team2):
+        print("\n  [5.2] Trying scorecard...")
+        score_xi = get_playing_xi_from_scorecard(match_id, team1, team2)
+        for team, players in score_xi.items():
+            if team not in team_xi or not team_xi[team]:
+                team_xi[team] = players
+        if team_xi.get(team1) and team_xi.get(team2) and not result["xi_source"]:
+            result["xi_source"] = "scorecard"
+
+    # Source 3: Hardcoded
+    if not team_xi.get(team1) or not team_xi.get(team2):
+        print("\n  [5.3] Trying hardcoded data...")
+        hard_xi = get_playing_xi_from_hardcoded(match_id, team1, team2)
+        for team, players in hard_xi.items():
+            if team not in team_xi or not team_xi[team]:
+                team_xi[team] = players
+        if team_xi.get(team1) and team_xi.get(team2) and not result["xi_source"]:
+            result["xi_source"] = "hardcoded"
+
+    # Assign XI to result
+    result["team1_xi"] = team_xi.get(team1, [])
+    result["team2_xi"] = team_xi.get(team2, [])
+
+    if not result["xi_source"]:
+        print("\n  ⚠️ Playing XI not found - may not be announced yet (announced at toss)")
+
+    # ═══════════════════════════════════════════════════════════
+    # STEP 6: Calculate chasing team
+    # ═══════════════════════════════════════════════════════════
+    if result["toss_done"]:
+        tw = result["toss_winner"]
+        td = result["toss_decision"]
+        result["chasing_team"] = (team2 if tw == team1 else team1) if td == "bat" else tw
+
+    # ═══════════════════════════════════════════════════════════
+    # Print Summary
+    # ═══════════════════════════════════════════════════════════
+    print(f"\n{'='*70}")
+    print("  ✅ SCRAPING COMPLETE")
+    print(f"{'='*70}")
+    print(f"  Match ID:    {result['match_id']}")
+    print(f"  Is IPL:      {result['is_ipl']}")
+    print(f"  Teams:       {result['team1']} vs {result['team2']}")
+    print(f"  Venue:       {result['venue']}")
+    print(f"  Toss Done:   {result['toss_done']}")
+    print(f"  Toss Winner: {result['toss_winner']}")
+    print(f"  Toss Dec:    {result['toss_decision']}")
+    print(f"  Chasing:     {result['chasing_team']}")
+    print(f"  XI Source:   {result['xi_source']}")
+    print(f"\n  {result['team1']} XI ({len(result['team1_xi'])} players):")
+    for i, p in enumerate(result['team1_xi'], 1):
+        print(f"    {i:2}. {p}")
+    print(f"\n  {result['team2']} XI ({len(result['team2_xi'])} players):")
+    for i, p in enumerate(result['team2_xi'], 1):
+        print(f"    {i:2}. {p}")
+    print(f"{'='*70}\n")
+
+    return result
+
+
+# ══════════════════════════════════════════════════════════════
+# MAIN ENTRY POINT
+# ══════════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    print("\n" + "="*70)
+    print("  IPL MATCH SCRAPER")
+    print("  Only works for IPL matches - rejects international matches")
+    print("="*70)
+    
+    print("\n✅ Valid IPL Teams:")
+    for abbr, name in sorted(IPL_TEAM_ABBR.items()):
+        if abbr in ["CSK", "MI", "RCB", "KKR", "DC", "GT", "LSG", "RR", "PBKS", "SRH"]:
+            print(f"   {abbr:4} = {name}")
+    
+    print("\n❌ NOT IPL (will be rejected):")
+    print("   IND, PAK, AUS, ENG, SA, NZ, WI, SL, BAN, AFG, etc.")
+    
+    print("\n" + "-"*70)
+    
+    # Try to find live IPL match
+    match_id = get_live_ipl_match_id()
+    
+    if not match_id:
+        print("\nNo live IPL match found. Enter match ID manually:")
+        try:
+            user_input = input("Match ID (or press Enter to exit): ").strip()
+            if user_input:
+                match_id = int(user_input)
+            else:
+                print("Exiting...")
+                exit(0)
+        except ValueError:
+            print("Invalid input. Exiting...")
+            exit(1)
+    
+    # Scrape the match
+    result = scrape_match(match_id)
+    
+    # Output
+    if result.get("error"):
+        print(f"\n❌ FAILED: {result['error']}")
+        print("\nPlease enter a valid IPL match ID.")
+        print("IPL matches have teams like CSK, MI, RCB, KKR, DC, GT, LSG, RR, PBKS, SRH")
+    else:
+        print("\n✅ SUCCESS!")
+        print("\nJSON Output:")
+        print("-"*70)
+        print(json.dumps(result, indent=2, default=str))
