@@ -16,10 +16,24 @@ except Exception:
     CRICINFO_CLIENT = None
     CRICDATA_AVAILABLE = False
 
+# ════════════════════════════════════════════════════════════
+# ✅ IPL-LOCKED CONSTANTS — All URLs are IPL series specific
+# ════════════════════════════════════════════════════════════
+
 IPL_SERIES_ID = "1510719"
-LIVE_SCORES_URL = "https://www.cricbuzz.com/cricket-match/live-scores"
+
+# ✅ Only fetches live scores FOR this IPL series — not all cricket
+IPL_LIVE_SCORES_URL = f"https://www.cricbuzz.com/cricket-match/live-scores/series/{IPL_SERIES_ID}"
+
+# ✅ IPL schedule page — upcoming + recent matches in this series only
+IPL_SCHEDULE_URL = f"https://www.cricbuzz.com/cricket-series/{IPL_SERIES_ID}/indian-premier-league-2026/matches"
+
+# ✅ Match-level URLs (still use match_id, but we only ever pass IPL match IDs now)
 MATCH_URL_TEMPLATE = "https://www.cricbuzz.com/live-cricket-scores/{match_id}"
 MATCH_SQUADS_URL = "https://www.cricbuzz.com/live-cricket-scorecard/{match_id}"
+
+# ✅ ESPN Cricinfo IPL series scorecard
+ESPN_IPL_SERIES_URL = f"https://www.espncricinfo.com/series/{IPL_SERIES_ID}"
 
 HEADERS = {
     "User-Agent": (
@@ -29,22 +43,41 @@ HEADERS = {
     )
 }
 
+# ════════════════════════════════════════════════════════════
+# ✅ VALID IPL TEAMS — only these 10 franchises are allowed
+# ════════════════════════════════════════════════════════════
+
 TEAM_ALIASES = {
     "CSK": "Chennai Super Kings",
     "DC": "Delhi Capitals",
-    "DD": "Delhi Capitals",
+    "DD": "Delhi Capitals",       # old name alias
     "GL": "Gujarat Lions",
     "GT": "Gujarat Titans",
     "KKR": "Kolkata Knight Riders",
     "LSG": "Lucknow Super Giants",
     "MI": "Mumbai Indians",
     "PBKS": "Punjab Kings",
-    "KXIP": "Punjab Kings",
+    "KXIP": "Punjab Kings",       # old name alias
     "RR": "Rajasthan Royals",
     "RCB": "Royal Challengers Bangalore",
     "SRH": "Sunrisers Hyderabad",
     "RPS": "Rising Pune Supergiant",
     "PWI": "Pune Warriors",
+}
+
+# ✅ These are the ACTIVE 10 IPL franchises for 2026
+# Used as the whitelist for validating scraped team names
+VALID_IPL_TEAMS = {
+    "Chennai Super Kings",
+    "Delhi Capitals",
+    "Gujarat Titans",
+    "Kolkata Knight Riders",
+    "Lucknow Super Giants",
+    "Mumbai Indians",
+    "Punjab Kings",
+    "Rajasthan Royals",
+    "Royal Challengers Bangalore",
+    "Sunrisers Hyderabad",
 }
 
 TEAM_ABBREVIATIONS = {
@@ -69,12 +102,72 @@ TEAM_NAME_CORRECTIONS = {
     "Royal Challengers Bengaluru": "Royal Challengers Bangalore",
     "royal challengers bengaluru": "Royal Challengers Bangalore",
     "Royal Challengers Bengaluru ": "Royal Challengers Bangalore",
+    "RCB Bangalore": "Royal Challengers Bangalore",
 }
 
 TEAM_TO_ABBR = {v: k for k, v in TEAM_ABBREVIATIONS.items()}
 
+# IPL team keywords for page-level IPL detection
+IPL_TEAM_KEYWORDS = {name.lower() for name in VALID_IPL_TEAMS}
+IPL_TEAM_KEYWORDS.update({abbr.lower() for abbr in TEAM_ABBREVIATIONS})
+
 KNOWN_XI: Dict[int, Dict[str, List[str]]] = {}
 
+
+# ════════════════════════════════════════════════════════════
+# ✅ IPL VALIDATION GATE — call this before ANY prediction
+# ════════════════════════════════════════════════════════════
+
+def validate_ipl_teams(team1: str, team2: str) -> bool:
+    """
+    Returns True only if BOTH teams are active IPL franchises.
+    This is the primary guard that prevents non-IPL matches (BAN vs PAK, etc.)
+    from ever reaching the ML model.
+
+    Call this immediately after scraping team names.
+    If this returns False, show an error in the UI and abort.
+    """
+    t1_ok = team1 in VALID_IPL_TEAMS
+    t2_ok = team2 in VALID_IPL_TEAMS
+
+    if not t1_ok:
+        print(f"[VALIDATION] ❌ '{team1}' is NOT a valid IPL team. Aborting.")
+    if not t2_ok:
+        print(f"[VALIDATION] ❌ '{team2}' is NOT a valid IPL team. Aborting.")
+
+    if t1_ok and t2_ok:
+        print(f"[VALIDATION] ✅ Both teams confirmed as IPL franchises: {team1} vs {team2}")
+        return True
+
+    return False
+
+
+def verify_page_is_ipl(soup: BeautifulSoup) -> bool:
+    """
+    Returns True if the fetched Cricbuzz page belongs to an IPL match.
+    Checks for series name text OR two or more IPL team names on the page.
+    Use this BEFORE parsing team names from any match page.
+    """
+    page_text = soup.get_text().lower()
+
+    # Direct series name check
+    if "indian premier league" in page_text or "ipl 2026" in page_text or "ipl 2025" in page_text:
+        print("[IPL-VERIFY] ✅ Page confirmed as IPL via series name.")
+        return True
+
+    # Count how many IPL team names appear on the page
+    hits = sum(1 for keyword in IPL_TEAM_KEYWORDS if keyword in page_text)
+    if hits >= 2:
+        print(f"[IPL-VERIFY] ✅ Page confirmed as IPL via {hits} team keyword matches.")
+        return True
+
+    print("[IPL-VERIFY] ❌ Page does NOT appear to be an IPL match. Skipping.")
+    return False
+
+
+# ════════════════════════════════════════════════════════════
+# UTILITY HELPERS
+# ════════════════════════════════════════════════════════════
 
 def _clean_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
@@ -91,9 +184,6 @@ def _correct_team_name(name: str) -> str:
     if not name:
         return name
     corrected = TEAM_NAME_CORRECTIONS.get(name)
-    if corrected:
-        return corrected
-    corrected = TEAM_NAME_CORRECTIONS.get(name.lower())
     if corrected:
         return corrected
     for wrong, right in TEAM_NAME_CORRECTIONS.items():
@@ -136,17 +226,81 @@ def _safe_div(num: float, den: float, fallback: float) -> float:
 
 
 def _extract_player_name(text: str) -> str:
-    """Extract clean player name - removes (c), (wk), †, * etc."""
+    """Remove (c), (wk), †, * etc. from player name strings."""
     name = re.sub(r'\s*[\(\[].*?[\)\]]', '', text)
     name = re.sub(r'[†*]', '', name)
-    name = _clean_text(name)
-    return name
+    return _clean_text(name)
 
 
-# ─────────────────────────────────────────────────────────
-# ESPN CRICINFO FUNCTIONS
-# ─────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════
+# ✅ IPL LIVE MATCH DETECTION — series-locked
+# ════════════════════════════════════════════════════════════
+
+def get_live_ipl_match_id() -> Optional[int]:
+    """
+    Fetches the Cricbuzz IPL-series-specific live scores page
+    (not the global live scores) and returns the first live match ID found.
+
+    URL used: /cricket-match/live-scores/series/{IPL_SERIES_ID}
+    This means ONLY IPL matches are ever considered — no Bangladesh vs Pakistan.
+    """
+    try:
+        print(f"[LIVE-DETECT] Fetching IPL live scores: {IPL_LIVE_SCORES_URL}")
+        soup = _request_soup(IPL_LIVE_SCORES_URL)
+
+        # Cricbuzz live score cards link to /live-cricket-scores/{match_id}/...
+        links = soup.select("a[href*='/live-cricket-scores/']")
+        for link in links:
+            href = link.get("href", "")
+            match = re.search(r'/live-cricket-scores/(\d+)', href)
+            if match:
+                match_id = int(match.group(1))
+                print(f"[LIVE-DETECT] ✅ Found IPL live match ID: {match_id}")
+                return match_id
+
+        print("[LIVE-DETECT] ⚠️ No live IPL match found. Trying schedule page for most recent match.")
+        return get_latest_ipl_match_id_from_schedule()
+
+    except Exception as e:
+        print(f"[LIVE-DETECT] Error: {e}")
+        return None
+
+
+def get_latest_ipl_match_id_from_schedule() -> Optional[int]:
+    """
+    Fallback: scrapes the IPL series schedule page on Cricbuzz
+    and returns the match ID of the most recently listed match.
+    Still locked to the IPL series — no risk of picking up other matches.
+    """
+    try:
+        print(f"[SCHEDULE] Fetching IPL schedule: {IPL_SCHEDULE_URL}")
+        soup = _request_soup(IPL_SCHEDULE_URL)
+
+        links = soup.select("a[href*='/live-cricket-scores/'], a[href*='/cricket-scores/']")
+        match_ids = []
+        for link in links:
+            href = link.get("href", "")
+            m = re.search(r'/(?:live-cricket-scores|cricket-scores)/(\d+)', href)
+            if m:
+                match_ids.append(int(m.group(1)))
+
+        if match_ids:
+            latest = match_ids[-1]  # last listed = most recent
+            print(f"[SCHEDULE] ✅ Latest IPL match ID from schedule: {latest}")
+            return latest
+
+        print("[SCHEDULE] ⚠️ No match IDs found on IPL schedule page.")
+    except Exception as e:
+        print(f"[SCHEDULE] Error: {e}")
+    return None
+
+
+# ════════════════════════════════════════════════════════════
+# ESPN CRICINFO FUNCTIONS (series-filtered)
+# ════════════════════════════════════════════════════════════
+
 def _get_espn_live_match(match_id: Optional[int] = None) -> Optional[dict]:
+    """Fetches live match data from ESPN Cricinfo, filtered to IPL series only."""
     if not CRICDATA_AVAILABLE or CRICINFO_CLIENT is None:
         return None
     try:
@@ -156,17 +310,22 @@ def _get_espn_live_match(match_id: Optional[int] = None) -> Optional[dict]:
             series = match.get("series", {})
             series_id = str(series.get("objectId", "")).strip()
             series_name = _clean_text(series.get("longName", "")).lower()
+            # ✅ Only IPL series matches pass through
             if (series_id == str(IPL_SERIES_ID).strip()
                     or "indian premier league" in series_name):
                 candidates.append(match)
 
-        if match_id is None:
-            return candidates[0] if candidates else None
+        if not candidates:
+            print("[ESPN] ⚠️ No live IPL matches found via ESPN Cricinfo.")
+            return None
 
-        match_id_str = str(match_id).strip()
+        if match_id is None:
+            return candidates[0]
+
         for m in candidates:
-            if str(m.get("objectId", "")).strip() == match_id_str:
+            if str(m.get("objectId", "")).strip() == str(match_id).strip():
                 return m
+
     except Exception as e:
         print(f"[ESPN] _get_espn_live_match error: {e}")
     return None
@@ -184,6 +343,10 @@ def _extract_xi_from_scorecard(scorecard: dict) -> Dict[str, List[str]]:
             team_name = _correct_team_name(
                 _clean_text(entry.get("team", {}).get("longName", ""))
             )
+            # ✅ Only store if this is a valid IPL team
+            if team_name not in VALID_IPL_TEAMS:
+                print(f"[ESPN-XI] ⚠️ Skipping non-IPL team from scorecard: {team_name}")
+                continue
             players = entry.get("players", []) or []
             names = [
                 _clean_text(p.get("player", {}).get("longName", ""))
@@ -192,7 +355,7 @@ def _extract_xi_from_scorecard(scorecard: dict) -> Dict[str, List[str]]:
             names = [n for n in names if n]
             if team_name and names:
                 team_xi[team_name] = names[:11]
-                print(f"[ESPN-XI] Found {len(names)} players for {team_name}")
+                print(f"[ESPN-XI] ✅ {len(names)} players found for {team_name}")
     except Exception as e:
         print(f"[ESPN] _extract_xi_from_scorecard error: {e}")
     return team_xi
@@ -253,49 +416,121 @@ def _extract_toss_from_espn_info(info: dict, team1: str, team2: str) -> Tuple[st
     return tw, td
 
 
-# ═══════════════════════════════════════════════════════════
-# NEW: CRICBUZZ PLAYING XI EXTRACTION
-# ═══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════
+# CRICBUZZ PLAYING XI EXTRACTION (IPL-validated)
+# ════════════════════════════════════════════════════════════
+
 def get_playing_xi_from_cricbuzz(match_id: int, team1: str, team2: str) -> Dict[str, List[str]]:
     """
     Extract Playing XI from Cricbuzz match page.
-    PRIMARY source for live Playing XI data.
+    ✅ Validates the page is IPL before parsing.
+    ✅ Only stores players for valid IPL teams.
     """
     team_xi: Dict[str, List[str]] = {}
-    
+
     try:
         url = MATCH_URL_TEMPLATE.format(match_id=match_id)
         print(f"[CB-XI] Fetching: {url}")
-        
+
         resp = requests.get(url, headers=HEADERS, timeout=20)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         page_text = resp.text
-        
+
+        # ✅ GUARD: verify this page is actually an IPL match
+        if not verify_page_is_ipl(soup):
+            print(f"[CB-XI] ❌ match_id={match_id} is NOT an IPL match. Aborting XI extraction.")
+            return {}
+
         # METHOD 1: Match info section
         info_items = soup.select(".cb-mtch-info-itm")
         for item in info_items:
             label_div = item.select_one(".cb-col.cb-col-27")
             value_div = item.select_one(".cb-col.cb-col-73")
-            
+
             if label_div and value_div:
                 label_text = _clean_text(label_div.get_text()).lower()
-                
+
                 if any(x in label_text for x in ["squad", "playing", "xi", "team"]):
                     current_team = None
                     for t in [team1, team2]:
                         if t and t.lower() in label_text:
                             current_team = t
                             break
-                    
+
                     if current_team:
                         player_links = value_div.select("a")
                         names = [_extract_player_name(link.get_text()) for link in player_links]
                         names = [n for n in names if n and len(n) > 2][:11]
                         if names:
                             team_xi[current_team] = names
-                            print(f"[CB-XI] Method 1: Found {len(names)} players for {current_team}")
-        
+                            print(f"[CB-XI] Method 1: {len(names)} players for {current_team}")
+
+        # METHOD 2: Playing XI section headers
+        if len(team_xi) < 2:
+            headers = soup.select(".cb-col.cb-col-100.cb-font-14, .cb-minfo-tm-nm")
+            for header in headers:
+                header_text = _clean_text(header.get_text())
+                current_team = None
+                for t in [team1, team2]:
+                    if t:
+                        t_lower = t.lower()
+                        abbr = TEAM_TO_ABBR.get(t, "").lower()
+                        if (t_lower in header_text.lower() or
+                                (abbr and abbr in header_text.lower())):
+                            if "playing" in header_text.lower() or "xi" in header_text.lower():
+                                current_team = t
+                                break
+
+                if current_team and current_team not in team_xi:
+                    parent = header.find_parent()
+                    if parent:
+                        player_links = parent.select("a[href*='/profiles/']")
+                        if not player_links:
+                            player_links = parent.select("a[href*='/cricket-player/']")
+                        names = [_extract_player_name(link.get_text()) for link in player_links]
+                        names = [n for n in names if n and len(n) > 2][:11]
+                        if names:
+                            team_xi[current_team] = names
+                            print(f"[CB-XI] Method 2: {len(names)} players for {current_team}")
+
+        # METHOD 3: Regex pattern from page text
+        if len(team_xi) < 2:
+            xi_patterns = [
+                r'([A-Za-z\s]+?)\s*\(?\s*Playing\s*XI\s*\)?\s*:?\s*([A-Za-z\s,\.]+?)(?=\n|$|[A-Z][a-z]+\s*\()',
+                r'([A-Za-z\s]+?)\s+XI\s*:?\s*([A-Za-z\s,\.]+?)(?=\n|$)',
+            ]
+            for pattern in xi_patterns:
+                matches = re.findall(pattern, page_text, re.IGNORECASE | re.MULTILINE)
+                for match in matches:
+                    team_name_raw = _clean_text(match[0])
+                    players_str = match[1]
+                    current_team = None
+                    for t in [team1, team2]:
+                        if t and (t.lower() in team_name_raw.lower() or
+                                  team_name_raw.lower() in t.lower()):
+                            current_team = t
+                            break
+                    if current_team and current_team not in team_xi:
+                        players = [_extract_player_name(p.strip()) for p in players_str.split(",")]
+                        players = [p for p in players if p and len(p) > 2][:11]
+                        if len(players) >= 5:
+                            team_xi[current_team] = players
+                            print(f"[CB-XI] Method 3: {len(players)} players for {current_team}")
+
+        # METHOD 4: Squad divs
+        if len(team_xi) < 2:
+            squad_sections = soup.select(".cb-play11-lft-col, .cb-minfo-tm-plyr")
+            for section in squad_sections:
+                parent = section.find_parent(class_=re.compile(r'cb-col'))
+                if parent:
+                    section_text = _clean_text(parent.get_text())
+                    current_team = None
+                    for t in [team1, team2]:
+                        if t and t.lower() in section_text.lower():
+                            current_team = t
+                            break
+                    if current_team and curre
         # METHOD 2: Playing XI section headers
         if len(team_xi) < 2:
             headers = soup.select(".cb-col.cb-col-100.cb-font-14, .cb-minfo-tm-nm")
