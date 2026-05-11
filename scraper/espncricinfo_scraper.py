@@ -1,30 +1,3 @@
-# scraper/espncricinfo_scraper.py — v5
-#
-# WHY v5:
-# Cricbuzz now serves their pages with Next.js (server-streamed React).
-# All the old DOM classes (cb-toss-sts, cb-text-inprogress, cb-min-stts) are
-# GONE. The match data — including the toss — lives inside escaped JSON in
-# <script>self.__next_f.push([1, "..."])</script> blocks.
-#
-# This version:
-#   1. Pulls the Cricbuzz HTML once,
-#   2. Concatenates and JSON-decodes every __next_f.push payload,
-#   3. Reads structured fields directly from that decoded JSON:
-#        - "tossResults":{"tossWinnerId":..,"tossWinnerName":..,"decision":..}
-#        - "shortStatus":"DC opt to bowl"
-#        - "team1"/"team2":{"id":..,"name":..}
-#        - "venue":{"name":..,"city":..}
-#        - per-player {"id","name","role","substitute","teamId"} → Playing XI
-#   4. Falls back to the legacy DOM scrape only if the Next.js payload is
-#      missing (e.g. Cricbuzz reverts).
-#   5. Keeps ESPN/cricdata as an optional first source.
-#   6. Keeps the IPL-only strict filter and the unchanged feature vector.
-#
-# Public API (unchanged — app.py needs no edits):
-#   get_todays_match_id() -> int | None
-#   scrape_match(match_id) -> dict
-#   build_feature_vector(...) -> pd.DataFrame
-
 import json
 import re
 from datetime import datetime
@@ -120,9 +93,6 @@ def _is_ipl_team(name):
     return _correct_team_name(name) in _IPL_CANONICAL
 
 
-# ─────────────────────────────────────────────────────────
-# CRICBUZZ Next.js EXTRACTION  (the heart of v5)
-# ─────────────────────────────────────────────────────────
 _NEXTF_RE = re.compile(
     r'self\.__next_f\.push\(\[\d+,\s*"((?:[^"\\]|\\.)*)"\]\)'
 )
@@ -192,7 +162,6 @@ def _extract_from_cricbuzz_nextf(html):
         out["team2_id"], out["team2"] = seen["team2"]
 
     # ── Toss ─────────────────────────────────────────────
-    # "tossResults":{"tossWinnerId":61,"tossWinnerName":"Delhi Capitals","decision":"Bowling"}
     m = re.search(
         r'"tossResults"\s*:\s*\{[^{}]*?'
         r'"tossWinnerName"\s*:\s*"([^"]+)"[^{}]*?'
@@ -200,7 +169,7 @@ def _extract_from_cricbuzz_nextf(html):
         decoded,
     )
     if not m:
-        # Try with "tossDecision" key
+   
         m = re.search(
             r'"tossResults"\s*:\s*\{[^{}]*?'
             r'"tossWinnerName"\s*:\s*"([^"]+)"[^{}]*?'
@@ -243,10 +212,6 @@ def _extract_from_cricbuzz_nextf(html):
     if mv:
         out["venue"] = f"{mv.group(1)}, {mv.group(2)}"
 
-    # ── Playing XI ───────────────────────────────────────
-    # Player object shape (order is stable in the Cricbuzz payload):
-    #   {"id":N,"name":"X","fullName":"...","nickName":"...","captain":bool,
-    #    "role":"...","keeper":bool,"substitute":bool,"teamId":N,...}
     player_re = re.compile(
         r'"id":(\d+),"name":"([^"]+)","fullName":"[^"]+","nickName":"[^"]+",'
         r'"captain":(?:true|false),"role":"([^"]+)","keeper":(?:true|false),'
@@ -273,9 +238,6 @@ def _extract_from_cricbuzz_nextf(html):
     return out
 
 
-# ─────────────────────────────────────────────────────────
-# LEGACY DOM FALLBACK (only used if Next.js extraction fails)
-# ─────────────────────────────────────────────────────────
 def _extract_teams_from_dom(soup):
     sources = []
     if soup.title and soup.title.string:
@@ -598,7 +560,7 @@ def scrape_match(match_id):
             errors.append(f"ESPN: {e}")
             print(f"[SCRAPE-ESPN] ✗ {e}")
 
-    # ── 2. Cricbuzz HTML  (always — needed for Next.js JSON) ──
+    # ── 2. Cricbuzz HTML 
     html, soup, nextf = "", None, None
     try:
         url = MATCH_URL_TEMPLATE.format(match_id=match_id)
@@ -736,9 +698,6 @@ def scrape_match(match_id):
         "scraped_at":    datetime.utcnow().isoformat() + "Z",
     }
 
-
-# ─────────────────────────────────────────────────────────
-# FEATURE VECTOR (unchanged shape — same columns, same defaults)
 # ─────────────────────────────────────────────────────────
 def build_feature_vector(
     match_info, player_lookup, matches,
